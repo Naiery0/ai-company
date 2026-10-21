@@ -18,8 +18,8 @@
 
   const P = {
     ink: '#141414', floorA: '#bdbdbd', floorB: '#b0b0b0',
-    wallL: '#575757', wallR: '#666666', wallTop: '#333333', trim: '#474747',
-    partX: '#8c8c8c', partY: '#7a7a7a', partTop: '#a9a9a9', lip: '#8a8a8a', lip2: '#7c7c7c',
+    wallL: '#d0d0d0', wallR: '#e0e0e0', wallTop: '#a8a8a8', trim: '#b8b8b8', frame: '#8a8a8a',
+    partX: '#dadada', partY: '#c6c6c6', partTop: '#f3f3f3', lip: '#b4b4b4', lip2: '#a4a4a4',
     wood: '#c98d55', woodL: '#9e6738', woodR: '#b47844', woodTop2: '#d9a06a',
     monitor: '#2a2a2a', led: '#6b6b6b', lamp: '#f6c445', coral: '#e2574c', mint: '#2fa37a',
     skin: '#f1c7a4', skinS: '#d9a882', pants: '#2a2a2a', paper: '#f5f5f5', plant: '#3e9a62', plantD: '#2b6e46', pot: '#b9643c',
@@ -39,16 +39,16 @@
   // ───────── 배치 ─────────
   // 방: 바닥 칸 범위 [x0,x1)×[y0,y1). name 이 있는 방만 이름표를 단다.
   const ROOMS = [
-    { key: 'planner', name: '기획실', x0: 0, x1: 6, y0: 0, y1: 4, floor: ['#c6c6c6', '#bcbcbc'] },
-    { key: 'meeting', name: '회의실', x0: 6, x1: 12, y0: 0, y1: 4, floor: ['#b2b2b2', '#aaaaaa'] },
-    { key: 'ceo', name: '대표실', x0: 12, x1: 18, y0: 0, y1: 4, floor: ['#ccc6bc', '#c2bcb2'] },
-    { key: 'hall', name: '복도', x0: 0, x1: 18, y0: 4, y1: 6, floor: ['#d8d8d8', '#d0d0d0'] },
-    { key: 'dev', name: '개발실', x0: 0, x1: 6, y0: 6, y1: 10, floor: ['#bebebe', '#b3b3b3'] },
-    { key: 'qa', name: 'QA실', x0: 6, x1: 11, y0: 6, y1: 10, floor: ['#c4c9c6', '#babfbc'] },
-    { key: 'server', name: '서버실', x0: 11, x1: 16, y0: 6, y1: 10, floor: ['#8e8e8e', '#858585'] },
-    { key: 'passage', x0: 16, x1: 18, y0: 6, y1: 10, floor: ['#d8d8d8', '#d0d0d0'] },
-    { key: 'docs', name: '문서 보관실', x0: 0, x1: 5, y0: 10, y1: 15, floor: ['#c8c2b8', '#beb8ae'] },
-    { key: 'lounge', name: '라운지', x0: 5, x1: 18, y0: 10, y1: 15, floor: ['#c9a27a', '#bf976e'] },
+    { key: 'planner', name: '기획실', x0: 0, x1: 6, y0: 0, y1: 4, floor: ['#ededed', '#e4e4e4'] },
+    { key: 'meeting', name: '회의실', x0: 6, x1: 12, y0: 0, y1: 4, floor: ['#e2e2e2', '#dadada'] },
+    { key: 'ceo', name: '대표실', x0: 12, x1: 18, y0: 0, y1: 4, floor: ['#eee8de', '#e5dfd5'] },
+    { key: 'hall', name: '복도', x0: 0, x1: 18, y0: 4, y1: 6, floor: ['#f4f4f4', '#ececec'] },
+    { key: 'dev', name: '개발실', x0: 0, x1: 6, y0: 6, y1: 10, floor: ['#e9e9e9', '#e0e0e0'] },
+    { key: 'qa', name: 'QA실', x0: 6, x1: 11, y0: 6, y1: 10, floor: ['#e6ece8', '#dde3df'] },
+    { key: 'server', name: '서버실', x0: 11, x1: 16, y0: 6, y1: 10, floor: ['#d2d2d2', '#c9c9c9'] },
+    { key: 'passage', x0: 16, x1: 18, y0: 6, y1: 10, floor: ['#f4f4f4', '#ececec'] },
+    { key: 'docs', name: '문서 보관실', x0: 0, x1: 5, y0: 10, y1: 15, floor: ['#ece6dc', '#e3ddd3'] },
+    { key: 'lounge', name: '라운지', x0: 5, x1: 18, y0: 10, y1: 15, floor: ['#ddb990', '#d3af86'] },
   ];
   // 칸막이: ['x', gy, gx0, gx1] = gy 선을 따라 gx0~gx1, ['y', gx, gy0, gy1] = gx 선을 따라. 빈 구간이 문.
   const WALLS = [
@@ -175,7 +175,7 @@
   function boxRect(ctx, x0, y0, x1, y1, h, top, left, right, z = 0) {
     const A = up(iso(x0, y0), z), B = up(iso(x1, y0), z), C = up(iso(x1, y1), z), D = up(iso(x0, y1), z);
     poly(ctx, [D, C, up(C, h), up(D, h)], left);
-    poly(ctx, [B, C, up(C, h), up(B, h)], right);
+    if (right) poly(ctx, [B, C, up(C, h), up(B, h)], right); // right=null: 이어 붙는 조각의 안쪽 면은 생략
     poly(ctx, [up(A, h), up(B, h), up(C, h), up(D, h)], top);
   }
   function floorRect(ctx, x0, y0, x1, y1, c) { poly(ctx, [iso(x0, y0), iso(x1, y0), iso(x1, y1), iso(x0, y1)], c); }
@@ -250,7 +250,7 @@
     poly(ctx, wallQuad('L', 0, GY, 0, 4), P.trim);
 
     // 기획실: 명세 보드(기능 수만큼 카드, 기획 중이면 다음 칸이 깜빡임)
-    poly(ctx, wallQuad('R', 0.7, 5.0, 16, 46), P.trim);
+    poly(ctx, wallQuad('R', 0.7, 5.0, 16, 46), P.frame);
     poly(ctx, wallQuad('R', 0.85, 4.85, 18, 44), '#f0f0f0');
     {
       const n = state.run && state.run.plan ? Math.min(8, state.run.plan.features.length) : 0;
@@ -266,7 +266,7 @@
       }
     }
     // 회의실: 업무 단계 보드
-    poly(ctx, wallQuad('R', 6.7, 11.3, 16, 46), P.trim);
+    poly(ctx, wallQuad('R', 6.7, 11.3, 16, 46), P.frame);
     poly(ctx, wallQuad('R', 6.85, 11.15, 18, 44), '#f0f0f0');
     {
       const stages = state.run ? state.run.stages : null;
@@ -284,7 +284,7 @@
     }
     // 대표실: 창문(밤하늘)과 시계
     for (const [a, b] of [[12.6, 14.3], [15.4, 17.3]]) {
-      poly(ctx, wallQuad('R', a - 0.12, b + 0.12, 16, 50), P.trim);
+      poly(ctx, wallQuad('R', a - 0.12, b + 0.12, 16, 50), P.frame);
       poly(ctx, wallQuad('R', a, b, 19, 47), P.sky);
       for (let i = 0; i < 4; i++) {
         const u = a + (b - a) * ((i * 0.27 + 0.13) % 1);
@@ -292,20 +292,20 @@
         if (Math.sin(t / 700 + i * 2 + a) > -0.3) R(ctx, q.x, q.y - 24 - ((i * 7) % 18), 1, 1, P.star);
       }
       const m = iso((a + b) / 2, 0);
-      R(ctx, m.x, m.y - 47, 1, 28, P.trim);
+      R(ctx, m.x, m.y - 47, 1, 28, P.frame);
     }
     { const q = iso(16.3, 0); R(ctx, q.x - 1, q.y - 41, 4, 4, P.star); }
     { const q = iso(14.85, 0); R(ctx, q.x - 4, q.y - 44, 9, 9, P.paper); R(ctx, q.x - 4, q.y - 44, 9, 1, P.ink); R(ctx, q.x - 4, q.y - 36, 9, 1, P.ink); R(ctx, q.x - 4, q.y - 44, 1, 9, P.ink); R(ctx, q.x + 4, q.y - 44, 1, 9, P.ink);
       const ang = t / 6000; R(ctx, q.x, q.y - 40, 1, 1, P.ink); R(ctx, q.x + Math.round(Math.cos(ang) * 2), q.y - 40 + Math.round(Math.sin(ang) * 2), 1, 1, P.coral); }
 
     // 왼쪽 벽: 기획실 달력, 입구, 개발실 대형 화면
-    poly(ctx, wallQuad('L', 1.0, 3.0, 22, 42), P.trim);
+    poly(ctx, wallQuad('L', 1.0, 3.0, 22, 42), P.frame);
     poly(ctx, wallQuad('L', 1.1, 2.9, 23, 41), '#f0f0f0');
     for (let i = 0; i < 12; i++) { const q = iso(0, 1.3 + (i % 4) * 0.4); R(ctx, q.x - 1, q.y - 37 + Math.floor(i / 4) * 4, 2, 2, i === 5 ? P.coral : '#b8b8b8'); }
-    poly(ctx, wallQuad('L', 4.25, 5.75, 0, 34), P.trim);
+    poly(ctx, wallQuad('L', 4.25, 5.75, 0, 34), P.frame);
     poly(ctx, wallQuad('L', 4.4, 5.6, 0, 31), '#2b2b2b');
     { const q = iso(0, 5.0); R(ctx, q.x - 6, q.y - 44, 12, 5, P.mint); R(ctx, q.x - 4, q.y - 42, 8, 1, '#cdeedf'); } // 입구 표시등
-    poly(ctx, wallQuad('L', 6.6, 9.4, 18, 46), P.trim);
+    poly(ctx, wallQuad('L', 6.6, 9.4, 18, 46), P.frame);
     poly(ctx, wallQuad('L', 6.75, 9.25, 20, 44), '#1c1c1c');
     {
       const devBusy = ['working', 'thinking'].includes((state.agents.dev || {}).state);
@@ -333,14 +333,14 @@
     poly(ctx, [iso(0, GY), iso(GX, GY), up(iso(GX, GY), -4), up(iso(0, GY), -4)], P.lip);
     poly(ctx, [iso(GX, 0), iso(GX, GY), up(iso(GX, GY), -4), up(iso(GX, 0), -4)], P.lip2);
     // 깔개
-    floorRect(ctx, 6.9, 0.7, 11.1, 3.5, '#9c9c9c'); floorRect(ctx, 7.05, 0.85, 10.95, 3.35, '#a6a6a6');
+    floorRect(ctx, 6.9, 0.7, 11.1, 3.5, '#c8c8c8'); floorRect(ctx, 7.05, 0.85, 10.95, 3.35, '#d2d2d2');
     floorRect(ctx, 8.7, 11.5, 12.6, 13.8, P.rugD); floorRect(ctx, 8.85, 11.65, 12.45, 13.65, P.rug);
     // 일하는 책상 아래 조명
     const glow = (p) => { const c = iso(p.gx + 0.6, p.gy + 0.6); ctx.globalAlpha = 0.22 + 0.06 * Math.sin(t / 300); diamond(ctx, c.x, c.y, 26, 13, P.lamp); ctx.globalAlpha = 1; };
     for (const id of Object.keys(HOME)) { const a = state.agents[id]; if (a && (a.state === 'working' || a.state === 'thinking') && near(state.chars[id] || {}, HOME[id])) glow(HOME[id]); }
     for (const c of Object.values(state.chars)) if (c.kind === 'temp' && c.desk && !c.leaving && near(c, c.desk)) glow(c.desk);
     // 서버실 바닥 케이블 라인
-    for (let i = 0; i < 3; i++) floorRect(ctx, 11.3, 8.25 + i * 0.12, 15.6, 8.3 + i * 0.12, '#7a7a7a');
+    for (let i = 0; i < 3; i++) floorRect(ctx, 11.3, 8.25 + i * 0.12, 15.6, 8.3 + i * 0.12, '#b0b0b0');
   }
 
   // ───────── 칸막이 ─────────
@@ -445,13 +445,20 @@
     if (inLounge) { const s = Math.floor(t / 300) % 3; R(ctx, c.x + 2, c.y - 16 - s, 1, 2, '#e6e6e6'); }
   }
 
-  function drawSofa(ctx, t) {
-    const c = iso((SOFA.x0 + SOFA.x1) / 2, (SOFA.y0 + SOFA.y1) / 2);
-    if (drawAsset(ctx, 'sofa', c.x, c.y, 'idle', t)) return;
-    boxRect(ctx, SOFA.x0, SOFA.y0, SOFA.x1, SOFA.y0 + 0.22, 15, P.leatherR, P.leatherL, P.leatherR); // 등받이
-    boxRect(ctx, SOFA.x0, SOFA.y0 + 0.22, SOFA.x1, SOFA.y1, 7, P.leather, P.leatherL, P.leatherR);  // 방석
-    boxRect(ctx, SOFA.x0, SOFA.y0, SOFA.x0 + 0.22, SOFA.y1, 11, P.leatherR, P.leatherL, P.leatherR); // 팔걸이
-    boxRect(ctx, SOFA.x1 - 0.22, SOFA.y0, SOFA.x1, SOFA.y1, 11, P.leatherR, P.leatherL, P.leatherR);
+  // 소파는 1칸 폭 조각으로 나눠 그린다(조각마다 깊이를 따로 매겨 뒤쪽 칸막이엔 안 묻히고 앞사람은 안 가림)
+  const SOFA_SLICES = [];
+  for (let i = Math.floor(SOFA.x0); i < SOFA.x1; i++) SOFA_SLICES.push({ i, x0: Math.max(SOFA.x0, i), x1: Math.min(SOFA.x1, i + 1) });
+  function drawSofaSlice(ctx, s, t) {
+    if (assets.images.sofa) {
+      if (s.i === SOFA_SLICES[0].i) { const c = iso((SOFA.x0 + SOFA.x1) / 2, (SOFA.y0 + SOFA.y1) / 2); drawAsset(ctx, 'sofa', c.x, c.y, 'idle', t); }
+      return;
+    }
+    const last = s.x1 === SOFA.x1;
+    const side = last ? P.leatherR : null;
+    boxRect(ctx, s.x0, SOFA.y0, s.x1, SOFA.y0 + 0.22, 15, P.leatherR, P.leatherL, side); // 등받이
+    boxRect(ctx, s.x0, SOFA.y0 + 0.22, s.x1, SOFA.y1, 7, P.leather, P.leatherL, side);  // 방석
+    if (s.x0 === SOFA.x0) boxRect(ctx, SOFA.x0, SOFA.y0, SOFA.x0 + 0.22, SOFA.y1, 11, P.leatherR, P.leatherL, P.leatherR); // 팔걸이
+    if (last) boxRect(ctx, SOFA.x1 - 0.22, SOFA.y0, SOFA.x1, SOFA.y1, 11, P.leatherR, P.leatherL, P.leatherR);
   }
 
   function drawLoungeTable(ctx, t) {
@@ -538,7 +545,7 @@
     if (drawAsset(ctx, 'board', c.x, c.y, 'idle', t)) return;
     const L = iso(p.gx - 0.7, p.gy), Rr = iso(p.gx + 0.7, p.gy);
     R(ctx, L.x + 3, L.y - 8, 1, 8, '#6a6a6a'); R(ctx, Rr.x - 4, Rr.y - 8, 1, 8, '#6a6a6a');
-    poly(ctx, [up(L, 8), up(Rr, 8), up(Rr, 30), up(L, 30)], P.trim);
+    poly(ctx, [up(L, 8), up(Rr, 8), up(Rr, 30), up(L, 30)], P.frame);
     poly(ctx, [up(L, 10), up(Rr, 10), up(Rr, 28), up(L, 28)], '#f0f0f0');
     const run = state.run;
     const crit = run && run.contract ? run.contract.criteria : [];
@@ -777,7 +784,8 @@
     for (const p of PLANTS) add(p.gx + p.gy, () => drawPlant(b, p, t));
     add(COOLER.gx + COOLER.gy, () => drawCooler(b, t));
     add(COFFEE.gx + COFFEE.gy, () => drawCoffee(b, t));
-    add(SOFA.x1 + SOFA.y1 - 0.6, () => drawSofa(b, t));
+    // 조각 깊이: 뒤 칸막이 조각(i+0.5+10)보다 크고, 소파 앞에 선 사람(gy 11.5)보다 작게
+    for (const s of SOFA_SLICES) add(s.i + 0.5 + SOFA.y0 + 0.2, () => drawSofaSlice(b, s, t));
     add(LTABLE.gx + LTABLE.gy, () => drawLoungeTable(b, t));
     const busy = serverBusy();
     RACKS.forEach((p, i) => add(p.gx + p.gy, () => drawRack(b, p, i, t, busy)));
