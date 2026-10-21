@@ -85,7 +85,7 @@ async function streamText(text) {
   out({ type: 'assistant', message: { id, role: 'assistant', content: [{ type: 'text', text }] }, parent_tool_use_id: null, session_id: sessionId });
 }
 
-async function tool(name, input, result, needPermission) {
+async function tool(name, input, result, needPermission, ms) {
   if (aborted) return;
   const id = rid();
   const tid = 'toolu_' + crypto.randomBytes(6).toString('hex');
@@ -102,7 +102,7 @@ async function tool(name, input, result, needPermission) {
     const resp = await new Promise((resolve) => pending.set(reqId, resolve));
     allowed = resp && resp.behavior === 'allow';
   } else {
-    await sleep(600 + Math.random() * 600);
+    await sleep(ms || 600 + Math.random() * 600);
   }
   out({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: tid, content: allowed ? result : '사용자가 거부했습니다', is_error: !allowed }] }, parent_tool_use_id: null, session_id: sessionId });
   await sleep(250);
@@ -125,6 +125,7 @@ async function handleTurn(prompt) {
     await streamText(isQa ? (data.pass ? '모든 항목을 확인했습니다.' : '실패 항목이 있어 반려합니다.') : '검토를 마쳤습니다. 결과를 정리했습니다.');
   } else if (isDev) {
     await streamText('요청을 확인했습니다. 관련 파일을 살펴보고 작업하겠습니다.\n');
+    await tool('Agent', { description: '관련 코드 조사', subagent_type: 'Explore', prompt: '할 일 관련 코드 위치를 찾아라' }, 'src/todo.js 에 추가 로직이 있습니다.', false, 6000);
     await tool('Glob', { pattern: 'src/**/*.js' }, 'src/todo.js\nsrc/storage.js', false);
     await tool('Read', { file_path: 'src/todo.js' }, '// todo', false);
     await tool('Edit', { file_path: 'src/todo.js', old_string: 'a', new_string: 'b' }, '수정 완료', false);
