@@ -1,0 +1,12 @@
+{
+  "name": "ai-company",
+  "version": "0.1.0",
+  "description": "claude.exe(Claude Code CLI)를 직원으로 쓰는 로컬 가상 회사 오케스트레이터",
+  "private": true,
+  "type": "commonjs",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "start": "node server/index.js",
+    "demo": "node server/index.js --demo"
+  }
+}
