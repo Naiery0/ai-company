@@ -67,7 +67,10 @@ class ClaudeSession extends EventEmitter {
     if (o.model) a.push('--model', o.model);
     if (o.effort) a.push('--effort', o.effort);
     if (o.permissionMode) a.push('--permission-mode', o.permissionMode);
-    if (o.tools && o.tools.length) a.push('--tools', o.tools.join(','));
+    if (Array.isArray(o.tools)) {
+      if (o.tools.length) a.push('--tools', o.tools.join(','));
+      else a.push('--tools', ''); // 빈 배열 = 도구 없이 답만
+    }
     if (o.appendSystemPrompt) a.push('--append-system-prompt', o.appendSystemPrompt);
     if (o.jsonSchema) a.push('--json-schema', JSON.stringify(o.jsonSchema));
     if (o.resume) a.push('--resume', o.resume);
@@ -83,6 +86,8 @@ class ClaudeSession extends EventEmitter {
     const env = { ...process.env };
     // 이 도구는 구독 로그인(claude.exe 자체 인증)을 사용한다. 실수로 API 키가 쓰이지 않게 비운다.
     if (!this.o.keepApiKey) delete env.ANTHROPIC_API_KEY;
+    // 서브에이전트를 포그라운드로: 백그라운드(2.1.x 기본)면 일이 끝나기 전에 result가 와서 다음 단계로 넘어가 버린다.
+    env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS = '1';
     this.proc = spawn(cmd, args, { cwd: this.o.cwd, env, shell, windowsHide: true });
     this.proc.stdout.setEncoding('utf8');
     this.proc.stderr.setEncoding('utf8');

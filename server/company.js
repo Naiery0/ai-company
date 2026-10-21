@@ -6,7 +6,7 @@ const { ClaudeSession, newId } = require('./claude');
 const { Transcript, toolLabel } = require('./transcript');
 const { Run } = require('./pipeline');
 const { ROLES, PROMPTS, SCHEMAS, READ_ONLY_TOOLS } = require('./roles');
-const { readJson, writeFile, structuredFrom } = require('./util');
+const { readJson, writeFile, appendFile, structuredFrom, git } = require('./util');
 
 const SAFE_BASH = [
   'Bash(npm test *)', 'Bash(npm run *)', 'Bash(npx tsc *)', 'Bash(npx vitest *)', 'Bash(npx jest *)',
@@ -18,6 +18,7 @@ const SAFE_BASH = [
 const DEFAULT_SETTINGS = {
   claudePath: 'claude',
   maxQaRounds: 3,
+  checkCommand: '', // 단독 업무 후 코드가 직접 돌릴 확인 명령. 비우면 package.json의 test 스크립트를 찾아 씀
   autoCommit: true,
   forceMode: 'auto', // auto(대표 판단) | chat | solo | team
   idleCloseMinutes: 20,
@@ -56,6 +57,7 @@ class Company {
     this.runs = new Map();
     this.runTranscripts = new Map();
     this.perms = new Map();
+    this.subs = new Map(); // 진행 중인 서브에이전트(사무실의 임시 직원)
     this.feedLog = [];
     this.activeRun = null;
     if (this.demo) this.settings.claudePath = path.join(appDir, 'tools', 'mock-claude.js');
@@ -103,6 +105,7 @@ class Company {
     const abs = path.resolve(p);
     if (!fs.existsSync(abs) || !fs.statSync(abs).isDirectory()) throw new Error('폴더를 찾을 수 없습니다');
     if (this.activeRun && ['running', 'review'].includes(this.activeRun.state.status)) throw new Error('진행 중인 업무가 끝난 뒤 프로젝트를 바꿀 수 있습니다');
+    this.flushSaves();
     for (const c of this.convs.values()) if (c.session) c.session.close();
     this.projectPath = abs;
     this.recent = [abs, ...this.recent.filter((x) => x !== abs)].slice(0, 8);
@@ -171,6 +174,7 @@ class Company {
       }
       const change = transcript.onEvent(ev);
       if (change) this.setAgent(agentId, change.state, change.bubble);
+      this.trackSubagents(ev, sess, agentId);
       if (ev.kind === 'exit') {
         for (const p of this.perms.values()) if (p.session === sess && p.status === 'pending') this.resolvePermissionEntry(p, 'cancelled');
       }
@@ -178,6 +182,24 @@ class Company {
     sess.start();
     this.setAgent(agentId, 'thinking', '준비 중');
     return sess;
+  }
+
+  /** 서브에이전트(Agent/Task 도구) 시작·끝을 사무실에 알린다(임시 직원으로 표시). */
+  trackSubagents(ev, sess, agentId) {
+    const end = (id) => { this.subs.delete(id); this.broadcast('fx', { kind: 'sub-end', id }); };
+    if (ev.kind === 'assistant') {
+      for (const b of ev.content || []) {
+        if (b.type !== 'tool_use' || !['Agent', 'Task'].includes(b.name) || this.subs.has(b.id)) continue;
+        const input = b.input || {};
+        const sub = { id: b.id, agentId, label: String(input.description || input.subagent_type || '조사').slice(0, 24), session: sess };
+        this.subs.set(b.id, sub);
+        this.broadcast('fx', { kind: 'sub-start', id: sub.id, agentId, label: sub.label });
+      }
+    } else if (ev.kind === 'tool_result' && this.subs.has(ev.toolUseId)) {
+      end(ev.toolUseId);
+    } else if (ev.kind === 'exit') {
+      for (const s of [...this.subs.values()]) if (s.session === sess) end(s.id);
+    }
   }
 
   agentTranscript(runId, agentId) {
@@ -233,7 +255,7 @@ class Company {
 
   // ───────── 대화 ─────────
   makeConv(id, title, createdAt) {
-    const conv = { id, title: title || '새 대화', createdAt: createdAt || Date.now(), sessionId: null, session: null, busy: false, idleTimer: null };
+    const conv = { id, title: title || '새 대화', createdAt: createdAt || Date.now(), sessionId: null, session: null, busy: false, idleTimer: null, queue: [] };
     conv.transcript = new Transcript((op, payload) => {
       if (op === 'upsert') this.broadcast('chat', { convId: id, op, item: payload });
       else this.broadcast('chat', { convId: id, op, ...payload });
@@ -253,14 +275,27 @@ class Company {
     return [...this.convs.values()].sort((a, b) => b.createdAt - a.createdAt).map((c) => ({ id: c.id, title: c.title, createdAt: c.createdAt, busy: c.busy }));
   }
 
+  /** 대화 저장은 0.4초 묶어서 쓴다(스트리밍 중 항목마다 전체 파일을 다시 쓰지 않게). */
   saveConv(conv) {
     if (!this.projectPath) return;
+    const dir = this.projectPath; // 그 사이 프로젝트가 바뀌어도 원래 프로젝트에 쓴다
+    clearTimeout(conv.saveTimer);
+    conv.saveFlush = () => { clearTimeout(conv.saveTimer); conv.saveFlush = null; this.writeConv(conv, dir); };
+    conv.saveTimer = setTimeout(conv.saveFlush, 400);
+  }
+
+  writeConv(conv, dir) {
     try {
-      const gi = path.join(this.projectPath, '.company', '.gitignore');
+      const gi = path.join(dir, '.company', '.gitignore');
       if (!fs.existsSync(gi)) writeFile(gi, '# 대화 기록과 실행 로그는 커밋하지 않습니다\nchats/\nruns/\n');
-      writeFile(path.join(this.projectPath, '.company', 'chats', `${conv.id}.json`),
+      writeFile(path.join(dir, '.company', 'chats', `${conv.id}.json`),
         JSON.stringify({ id: conv.id, title: conv.title, createdAt: conv.createdAt, sessionId: conv.sessionId, route: conv.route || null, items: conv.transcript.items }, null, 1));
     } catch { /* noop */ }
+  }
+
+  /** 아직 쓰지 않은 대화 저장을 바로 쓴다(프로젝트 전환·서버 종료 시). */
+  flushSaves() {
+    for (const c of this.convs.values()) if (c.saveFlush) c.saveFlush();
   }
 
   requireProject() { if (!this.projectPath) throw new Error('먼저 작업할 프로젝트 폴더를 여세요'); }
@@ -276,7 +311,15 @@ class Company {
     if (!text) throw new Error('보낼 내용이 없습니다');
     let conv = convId && this.convs.get(convId);
     if (!conv) conv = this.newConv();
-    if (conv.busy) throw new Error('이 대화는 아직 응답 중입니다');
+    if (conv.busy) {
+      // 개발자와 대화 중이면 막지 않고 대기열에 넣었다가 응답이 끝나면 이어서 보낸다
+      if (conv.route === 'chat' && conv.session && !conv.triageSession) {
+        conv.transcript.addUser(text);
+        conv.queue.push({ text, opts: { permissionMode, model } });
+        return { convId: conv.id, queued: true };
+      }
+      throw new Error('이 대화는 아직 응답 중입니다');
+    }
     const run = this.activeRun;
     if (run && run.state.status === 'running') throw new Error('회사가 업무를 처리하는 중입니다. 같은 파일을 동시에 고치지 않도록 끝날 때까지 기다리거나 업무를 중지하세요');
     if (conv.title === '새 대화') { conv.title = text.split('\n')[0].slice(0, 30); this.broadcast('convs', this.convList()); }
@@ -302,7 +345,8 @@ class Company {
       conv.busy = false;
       if (conv.cancelTriage) { conv.cancelTriage = false; conv.transcript.addNotice('중지했습니다', 'warn'); this.broadcast('convs', this.convList()); return; }
       conv.route = t.route;
-      conv.transcript.push({ type: 'route', route: t.route, reason: t.reason, forced: !!t.forced });
+      // 판단 비용: 대화로 가면 여기에, 업무로 가면 업무의 역할별 비용(대표)에 기록한다
+      conv.transcript.push({ type: 'route', route: t.route, reason: t.reason, forced: !!t.forced, costUsd: t.route === 'chat' ? t.costUsd || 0 : 0 });
       this.feed(`처리 방식: ${t.route === 'chat' ? '대화' : t.route === 'solo' ? '단독' : '팀'} · ${t.reason}`, 'ceo');
       if (t.route === 'chat') { this.sendChat(conv, text, opts); return; }
       if (this.activeRun && ['running', 'review'].includes(this.activeRun.state.status)) {
@@ -333,7 +377,7 @@ class Company {
       const t = structuredFrom(r);
       if (!t || !['chat', 'solo', 'team'].includes(t.route)) throw new Error('판단 결과를 읽지 못함');
       this.setAgent('ceo', 'done', t.route === 'chat' ? '대화로' : t.route === 'solo' ? '단독으로' : '팀으로');
-      return { route: t.route, title: t.title || text.slice(0, 20), reason: t.reason || '' };
+      return { route: t.route, title: t.title || text.slice(0, 20), reason: t.reason || '', costUsd: r.costUsd || 0 };
     } catch (e) {
       this.setAgent('ceo', 'idle', null);
       return { route: 'chat', title: text.slice(0, 20), reason: `판단에 실패해 대화로 진행합니다(${e.message})` };
@@ -362,6 +406,14 @@ class Company {
     this.broadcast('convs', this.convList());
     conv.session.send(text).catch((e) => conv.transcript.addNotice(e.message, 'error')).finally(() => {
       conv.busy = false;
+      const next = conv.queue.shift();
+      if (next) {
+        const run = this.activeRun;
+        if (run && run.state.status === 'running') {
+          conv.transcript.addNotice(`회사 업무가 시작되어 대기 중이던 메시지 ${conv.queue.length + 1}개를 보내지 않았습니다`, 'warn');
+          conv.queue = [];
+        } else { this.sendChat(conv, next.text, next.opts); return; }
+      }
       this.broadcast('convs', this.convList());
       this.saveConv(conv);
       const mins = Number(this.settings.idleCloseMinutes) || 20;
@@ -374,12 +426,14 @@ class Company {
     const c = convId && this.convs.get(convId);
     if (!c) return;
     if (c.triageSession) { c.cancelTriage = true; c.triageSession.interrupt(); return; }
+    if (c.queue.length) { c.transcript.addNotice(`대기 중이던 메시지 ${c.queue.length}개를 보내지 않았습니다`, 'warn'); c.queue = []; }
     if (c.session) c.session.interrupt();
   }
 
   deleteConv(convId) {
     const c = this.convs.get(convId);
     if (!c) return;
+    clearTimeout(c.saveTimer);
     if (c.session) c.session.close();
     this.convs.delete(convId);
     try { fs.unlinkSync(path.join(this.projectPath, '.company', 'chats', `${convId}.json`)); } catch { /* noop */ }
@@ -393,6 +447,31 @@ class Company {
     if (this.activeRun === run) this.activeRun = null;
     const conv = this.convs.get(run.state.convId);
     if (conv) this.saveConv(conv);
+  }
+
+  /** 업무를 폐기: 업무 시작 이후 바뀐 파일을 시작 시점으로 되돌린다. 결재 대기 중이거나, 실패·중지된 마지막 업무만. */
+  async discardRun(runId) {
+    const r = this.getRun(runId);
+    const st = r.state;
+    if (!st.baseTree) throw new Error('업무 시작 시점 기록이 없어 되돌릴 수 없습니다');
+    if (st.status === 'review') { r.discard(); return; }
+    if (!['failed', 'cancelled'].includes(st.status)) throw new Error('진행 중이거나 이미 끝난 업무는 폐기할 수 없습니다');
+    const latest = [...this.runs.values()].sort((a, b) => b.state.createdAt - a.state.createdAt)[0];
+    if (latest !== r) throw new Error('이후에 진행한 업무가 있어 되돌릴 수 없습니다');
+    await this.discardChanges(r);
+  }
+
+  async discardChanges(run) {
+    const st = run.state;
+    const changed = await git.restoreTo(this.projectPath, st.baseTree);
+    const n = changed.filter((c) => !c.path.split('/').includes('.company')).length; // 회사 문서는 빼고 센다
+    st.status = 'discarded';
+    st.stage = 'done';
+    const dir = path.join(this.projectPath, '.company');
+    appendFile(path.join(dir, 'progress.md'), `- 폐기: ${st.title} (바뀐 파일 ${n}개를 시작 전으로 되돌림)\n`);
+    writeFile(path.join(dir, 'runs', `${st.id}.json`), JSON.stringify(st, null, 2));
+    this.feed(`폐기했습니다. 바뀐 파일 ${n}개를 업무 시작 전으로 되돌렸습니다`, 'ceo', 'warn');
+    this.emitRun(run);
   }
 
   getRun(runId) { const r = this.runs.get(runId); if (!r) throw new Error('업무를 찾을 수 없습니다'); return r; }
@@ -425,6 +504,7 @@ class Company {
       runs,
       activeRunId: this.activeRun ? this.activeRun.id : null,
       perms: [...this.perms.values()].map((p) => this.publicPerm(p)),
+      subs: [...this.subs.values()].map(({ session, ...s }) => s),
       feed: this.feedLog.slice(-60),
       home: os.homedir(),
       platform: process.platform,

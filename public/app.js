@@ -45,8 +45,16 @@
     if (!S.convId || !snap.convs[S.convId]) S.convId = snap.convList[0] ? snap.convList[0].id : null;
     S.viewRunId = snap.activeRunId || latestRunId();
     Office.setRun(S.viewRunId ? snap.runs[S.viewRunId] : null);
+    Office.setSubs(snap.subs);
+    Office.setDocs(docCount());
     $('#permMode').value = snap.settings.direct.permissionMode || 'acceptEdits';
     renderAll();
+  }
+
+  // 사무실 문서 보관실에 쌓을 문서 수(명세·완료 기준·QA 보고서)
+  function docCount() {
+    return Object.values(S.snap.runs || {}).filter((r) => r.status !== 'discarded')
+      .reduce((n, r) => n + (r.plan ? 1 : 0) + (r.contract ? 1 : 0) + (r.qa ? r.qa.length : 0), 0);
   }
 
   function latestRunId() {
@@ -76,7 +84,10 @@
     $('#officeEmpty').hidden = !!p;
     let cost = 0;
     for (const r of Object.values(S.snap.runs)) cost += r.cost || 0;
-    for (const c of Object.values(S.snap.convs)) for (const it of c.items) if (it.meta && it.meta.costUsd) cost += it.meta.costUsd;
+    for (const c of Object.values(S.snap.convs)) for (const it of c.items) {
+      if (it.meta && it.meta.costUsd) cost += it.meta.costUsd;
+      if (it.type === 'route' && it.costUsd) cost += it.costUsd; // 대화로 처리된 경우의 대표 판단 비용
+    }
     $('#costMeter').textContent = `사용량 $${cost.toFixed(2)}`;
   }
 
@@ -247,7 +258,7 @@
 
   // ───────── 업무 카드 ─────────
   const ROUTE_TEXT = { chat: '대화로 처리', solo: '개발자 단독', team: '팀 업무' };
-  const STATUS_TEXT = { running: '진행 중', review: '결재 대기', done: '완료', failed: '실패', cancelled: '중지됨' };
+  const STATUS_TEXT = { running: '진행 중', review: '결재 대기', done: '완료', failed: '실패', cancelled: '중지됨', discarded: '폐기됨' };
   const STATUS_TONE = { running: 'lamp', review: 'lamp', done: 'good', failed: 'bad', cancelled: '' };
 
   function renderRunCard(runId) {
@@ -268,7 +279,15 @@
       const show = qaLast.pass ? (qaLast.results || []).slice(0, 6) : fails;
       if (show.length) body.append(h('ul', { class: 'qa-list' }, show.map((x) => h('li', {}, h('span', { class: 'qid' }, x.id), h('span', { class: 'qst', 'data-s': x.status }, x.status === 'pass' ? '통과' : x.status === 'fail' ? '실패' : '보류'), h('span', {}, x.finding)))));
     }
+    if (r.check && r.check.command) {
+      const c = r.check;
+      body.append(h('details', { class: 'tool', 'data-state': c.ok ? 'done' : 'error' },
+        h('summary', {}, h('span', { class: 'tname' }, `확인 명령: ${c.command}`), h('span', { class: 'tstate' }, c.ok ? '통과' : '실패')),
+        h('pre', {}, c.output || '(출력 없음)')));
+    }
     if (r.status === 'review' && r.mode === 'solo' && r.lastDevSummary) body.append(h('div', { class: 'md', html: MD.render(r.lastDevSummary.slice(0, 1500)) }));
+    const costs = Object.entries(r.costByAgent || {}).filter(([, v]) => v > 0);
+    if (costs.length) body.append(h('div', { class: 'msg-meta' }, '사용량 ' + costs.map(([id, v]) => `${S.snap.roles[id] ? S.snap.roles[id].name : id} $${v.toFixed(3)}`).join(' · ')));
     if (r.error) body.append(h('div', { class: 'run-error' }, r.error));
     const actions = h('div', { class: 'run-actions' });
     actions.append(h('button', { class: 'btn small', type: 'button', onclick: () => { S.viewRunId = runId; Office.setRun(r); switchTab('agent'); } }, '직원 작업 보기'));
@@ -276,6 +295,9 @@
     if (r.status === 'review') {
       actions.append(h('button', { class: 'btn small good', type: 'button', onclick: () => api('/api/run/approve', { runId }).catch((e) => toast(e.message)) }, S.snap.isGit && S.snap.settings.autoCommit ? '승인하고 커밋' : '승인'));
       actions.append(h('button', { class: 'btn small', type: 'button', onclick: () => openReject(runId) }, '반려'));
+      if (r.baseTree) actions.append(h('button', { class: 'btn small danger', type: 'button', onclick: () => discardRun(runId) }, '폐기'));
+    } else if (r.baseTree && ['failed', 'cancelled'].includes(r.status) && latestRunId() === runId) {
+      actions.append(h('button', { class: 'btn small danger', type: 'button', onclick: () => discardRun(runId) }, '변경 되돌리기'));
     }
     if (r.status === 'running' || r.status === 'review') actions.append(h('button', { class: 'btn small danger', type: 'button', onclick: () => api('/api/stop', { runId }).catch((e) => toast(e.message)) }, '중지'));
     body.append(actions);
@@ -284,10 +306,16 @@
   }
 
   function onRun(run) {
+    const prev = S.snap.runs[run.id];
+    if (!prev || prev.status !== run.status) {
+      if (run.status === 'review') notify('결재 대기', run.title, `run-${run.id}`);
+      else if (run.status === 'failed') notify('업무 실패', `${run.title}: ${run.error || ''}`, `run-${run.id}`);
+    }
     S.snap.runs[run.id] = run;
     if (run.status === 'running' || run.status === 'review') { S.snap.activeRunId = run.id; S.viewRunId = run.id; }
     else if (S.snap.activeRunId === run.id) S.snap.activeRunId = null;
     if (S.viewRunId === run.id) Office.setRun(run);
+    Office.setDocs(docCount());
     const box = $('#messages');
     const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 120;
     $$(`[data-run-id="${run.id}"]`).forEach((el) => { const neu = renderRunCard(run.id); neu.dataset.itemId = el.dataset.itemId; el.replaceWith(neu); S.itemEls.set(`chat:${neu.dataset.itemId}`, neu); });
@@ -295,6 +323,11 @@
     renderStage();
     renderTop();
     renderComposer();
+  }
+
+  function discardRun(runId) {
+    if (!confirm('이 업무가 시작된 뒤 바뀐 파일을 모두 시작 전 상태로 되돌립니다.\n그동안 같은 파일을 직접 고쳤다면 그 내용도 함께 되돌아갑니다. 계속할까요?')) return;
+    api('/api/run/discard', { runId }).catch((e) => toast(e.message));
   }
 
   let rejectRunId = null;
@@ -330,6 +363,7 @@
   function renderPerms() {
     const tray = $('#permTray');
     tray.innerHTML = '';
+    Office.setPerms(S.snap.perms);
     for (const p of S.snap.perms) {
       const who = S.snap.roles[p.agentId] ? S.snap.roles[p.agentId].name : p.agentId;
       const canAlways = !p.suppressAlways && p.suggestions && p.suggestions.length;
@@ -347,6 +381,9 @@
     try { await api('/api/permission', { permId, decision }); } catch (e) { toast(e.message); }
   }
   function onPerm(p) {
+    if (p.status === 'pending' && !S.snap.perms.some((x) => x.id === p.id)) {
+      notify('승인 필요', `${S.snap.roles[p.agentId] ? S.snap.roles[p.agentId].name : ''}: ${p.label || p.toolName}`, p.id);
+    }
     S.snap.perms = S.snap.perms.filter((x) => x.id !== p.id);
     if (p.status === 'pending') S.snap.perms.push(p);
     renderPerms();
@@ -365,6 +402,7 @@
     let hint = following ? '이어지는 메시지는 개발자에게 바로 전달됩니다' : '';
     let block = !has;
     if (runBusy) { hint = '회사 업무 중입니다. 끝나면 보낼 수 있습니다'; block = true; }
+    else if (convBusy && following) hint = '응답 중입니다. 지금 보내면 응답이 끝난 뒤 이어서 전달됩니다';
     else if (convBusy) { hint = lastRoute(conv) ? '응답 중입니다' : '대표가 처리 방식을 판단하는 중입니다'; block = true; }
     else if (run && run.status === 'review') hint = '결재 대기 중에는 대화로만 처리됩니다';
     $('#composerHint').textContent = hint;
@@ -505,7 +543,7 @@
       const r = await api(`/api/diff${S.viewRunId ? `?runId=${encodeURIComponent(S.viewRunId)}` : ''}`);
       view.innerHTML = '';
       if (!r.isGit) { view.append(h('p', { class: 'hint' }, 'git 저장소가 아니라서 변경사항을 비교할 수 없습니다.')); return; }
-      view.append(h('p', { class: 'hint' }, r.base ? `업무 시작 시점(${r.base.slice(0, 7)}) 이후 변경` : '마지막 커밋 이후 변경'));
+      view.append(h('p', { class: 'hint' }, r.sinceStart ? '이 업무가 시작된 뒤 바뀐 내용(새 파일 포함)' : r.base ? `업무 시작 시점(${r.base.slice(0, 7)}) 이후 변경` : '마지막 커밋 이후 변경'));
       if (r.untracked && r.untracked.length) view.append(h('p', { class: 'hint' }, `새 파일(추적 안 됨): ${r.untracked.join(', ')}`));
       if (!r.diff.trim()) { view.append(h('p', {}, '변경된 내용이 없습니다.')); return; }
       const pre = h('pre', { class: 'diff' });
@@ -535,7 +573,11 @@
         h('small', {}, S.snap.demo ? '데모 모드에서는 모의 직원을 씁니다.' : 'PATH에 있으면 claude 그대로 두세요. 못 찾으면 claude.exe 전체 경로를 적습니다.')),
       h('label', { class: 'field' }, h('span', {}, '업무 처리 방식'), sel('forceMode', [['auto', '대표가 판단'], ['chat', '항상 대화'], ['solo', '항상 개발자 단독'], ['team', '항상 팀 업무']], s.forceMode),
         h('small', {}, '보통은 대표에게 맡겨두세요. 고정하면 판단 단계를 건너뜁니다.')),
-      h('label', { class: 'field' }, h('span', {}, 'QA 최대 반려 횟수'), h('input', { type: 'number', name: 'maxQaRounds', min: '1', max: '10', value: s.maxQaRounds })),
+      h('label', { class: 'field' }, h('span', {}, 'QA 최대 반려 횟수'), h('input', { type: 'number', name: 'maxQaRounds', min: '1', max: '10', value: s.maxQaRounds }),
+        h('small', {}, '단독 업무에서 확인 명령이 실패할 때 다시 맡기는 횟수에도 쓰입니다.')),
+      h('label', { class: 'field' }, h('span', {}, '단독 업무 확인 명령'),
+        h('input', { type: 'text', name: 'checkCommand', value: s.checkCommand || '', placeholder: '비우면 package.json의 test 스크립트(npm test)를 찾아 씁니다', spellcheck: 'false' }),
+        h('small', {}, '개발자가 끝내면 회사가 이 명령을 직접 실행해 확인합니다(사용량 0). 실패하면 출력과 함께 개발자에게 돌려보냅니다.')),
       h('label', { class: 'field' }, h('span', {}, '승인 시 자동 커밋'), sel('autoCommit', [['true', '켜기'], ['false', '끄기']], String(s.autoCommit)))));
 
     const roleFs = h('fieldset', {}, h('legend', {}, '직원별 설정'),
@@ -604,6 +646,34 @@
   $('#folderPath').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); browse($('#folderPath').value); } });
   $('#folderOpen').addEventListener('click', () => openProject($('#folderPath').value));
 
+  // ───────── 알림 ─────────
+  // 창을 보고 있지 않을 때만 띄운다. 켜기/끄기는 브라우저마다 기억한다.
+  const NOTIFY_KEY = 'aiCompany.notify';
+  function notifyOn() {
+    try { return 'Notification' in window && Notification.permission === 'granted' && localStorage.getItem(NOTIFY_KEY) === '1'; } catch { return false; }
+  }
+  function renderNotifyBtn() {
+    const on = notifyOn();
+    $('#notifyBtn').setAttribute('aria-pressed', String(on));
+    $('#notifyBtn').textContent = on ? '알림 켜짐' : '알림 꺼짐';
+  }
+  $('#notifyBtn').addEventListener('click', async () => {
+    if (!('Notification' in window)) { toast('이 브라우저는 알림을 지원하지 않습니다'); return; }
+    if (notifyOn()) { try { localStorage.setItem(NOTIFY_KEY, '0'); } catch { /* noop */ } renderNotifyBtn(); return; }
+    const perm = Notification.permission === 'granted' ? 'granted' : await Notification.requestPermission();
+    if (perm !== 'granted') toast('브라우저에서 알림이 차단되어 있습니다. 주소창의 사이트 설정에서 허용해 주세요');
+    else { try { localStorage.setItem(NOTIFY_KEY, '1'); } catch { /* noop */ } }
+    renderNotifyBtn();
+  });
+  function notify(title, body, tag) {
+    if (!document.hidden || !notifyOn()) return;
+    try {
+      const n = new Notification(title, { body, tag });
+      n.onclick = () => { window.focus(); n.close(); };
+    } catch { /* noop */ }
+  }
+  renderNotifyBtn();
+
   // ───────── 실시간 이벤트 ─────────
   function connect() {
     const es = new EventSource('/api/events');
@@ -613,7 +683,14 @@
       if (S.tab === 'agent') renderChips();
     });
     es.addEventListener('chat', (e) => onChat(JSON.parse(e.data)));
-    es.addEventListener('convs', (e) => { S.snap.convList = JSON.parse(e.data); renderConvSelect(); renderComposer(); });
+    es.addEventListener('convs', (e) => {
+      const list = JSON.parse(e.data);
+      for (const c of list) {
+        const old = S.snap.convList.find((x) => x.id === c.id);
+        if (old && old.busy && !c.busy && lastRoute(S.snap.convs[c.id]) === 'chat') notify('응답 완료', c.title, `conv-${c.id}`);
+      }
+      S.snap.convList = list; renderConvSelect(); renderComposer();
+    });
     es.addEventListener('run', (e) => onRun(JSON.parse(e.data)));
     es.addEventListener('transcript', (e) => onTranscript(JSON.parse(e.data)));
     es.addEventListener('perm', (e) => onPerm(JSON.parse(e.data)));
@@ -626,6 +703,6 @@
     es.onopen = () => { if (S.snap) { load(); checkHealth(); } };
   }
 
-  Office.init($('#office'), { onSelect: selectAgent });
+  Office.init($('#office'), { onSelect: selectAgent, onRoom: (room) => { if (room === 'docs') switchTab('files'); } });
   load().then(() => { connect(); checkHealth(); }).catch((e) => { document.body.prepend(h('p', { style: 'color:#fff;padding:12px' }, `서버에 연결하지 못했습니다: ${e.message}`)); });
 })();

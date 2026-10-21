@@ -109,6 +109,7 @@ const routes = {
 
   'POST /api/run/approve': async (b) => { company.getRun(b.runId).approve(); return { ok: true }; },
   'POST /api/run/reject': async (b) => { company.getRun(b.runId).reject(b.feedback); return { ok: true }; },
+  'POST /api/run/discard': async (b) => { await company.discardRun(b.runId); return { ok: true }; },
   'GET /api/run/transcripts': async (_, q) => company.runTranscriptItems(q.get('runId')),
 
   'GET /api/files': async () => (company.projectPath ? walk(path.join(company.projectPath, '.company'), path.join(company.projectPath, '.company')) : []),
@@ -123,7 +124,13 @@ const routes = {
     if (!(await git.isRepo(company.projectPath))) return { isGit: false };
     let base = null;
     const runId = q.get('runId');
-    if (runId && company.runs.get(runId)) base = company.runs.get(runId).state.baseCommit;
+    const st = runId && company.runs.get(runId) && company.runs.get(runId).state;
+    // 업무 시작 시점 스냅샷이 있으면 그 이후 바뀐 것만(업무 전부터 있던 사용자 변경은 제외)
+    if (st && st.baseTree) {
+      const d = await git.diffSince(company.projectPath, st.baseTree);
+      return { isGit: true, base: st.baseCommit, sinceStart: true, ...d, diff: d.diff.length > 400000 ? d.diff.slice(0, 400000) + '\n…(생략)' : d.diff };
+    }
+    if (st) base = st.baseCommit;
     const d = await git.diff(company.projectPath, base);
     const stat = await run('git', base ? ['diff', '--stat', base, '--', '.', ':(exclude).company'] : ['diff', '--stat', 'HEAD', '--', '.', ':(exclude).company'], company.projectPath);
     return { isGit: true, base, ...d, stat: stat.stdout, diff: d.diff.length > 400000 ? d.diff.slice(0, 400000) + '\n…(생략)' : d.diff };
@@ -176,6 +183,7 @@ server.listen(PORT, HOST, () => {
 });
 
 process.on('SIGINT', () => {
+  company.flushSaves();
   for (const c of company.convs.values()) if (c.session) c.session.kill();
   process.exit(0);
 });
