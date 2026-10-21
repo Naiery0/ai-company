@@ -24,9 +24,11 @@ function props() { return schema && schema.properties ? Object.keys(schema.prope
 
 function structured(prompt) {
   const p = props();
-  if (p.includes('mode')) {
-    const small = /오타|한 줄|작은|간단|rename|typo/i.test(prompt);
-    return { mode: small ? 'solo' : 'team', title: small ? '간단 수정' : '할 일 앱 만들기', reason: small ? '변경 범위가 작아 개발자 단독 처리로 충분합니다.' : '여러 기능과 화면이 필요한 신규 구축이라 명세와 검증이 필요합니다.' };
+  if (p.includes('route')) {
+    const m = (prompt.match(/<메시지>([\s\S]*?)<\/메시지>/) || [, prompt])[1];
+    if (/\?|뭐|어디|왜|설명|알려/.test(m)) return { route: 'chat', title: '질문', reason: '설명을 구하는 질문이라 대화로 바로 답하면 됩니다.' };
+    if (/오타|한 줄|작은|간단|버그|고쳐/.test(m)) return { route: 'solo', title: '간단 수정', reason: '범위가 한정된 수정이라 개발자 단독 처리로 충분합니다.' };
+    return { route: 'team', title: '할 일 앱 만들기', reason: '여러 기능이 필요한 신규 구축이라 명세와 독립 검증이 품질을 좌우합니다.' };
   }
   if (p.includes('features')) {
     return {
@@ -115,7 +117,7 @@ async function handleTurn(prompt) {
     out({ type: 'system', subtype: 'init', session_id: sessionId, model: arg('--model') || 'mock', permissionMode: arg('--permission-mode') || 'manual', cwd: process.cwd(), tools: ['Read', 'Edit', 'Bash'] });
   }
   const data = structured(prompt);
-  const isDev = /유일한 코드 작성자|직접 작업/.test(sys) && !schema;
+  const isDev = /유일한 코드 작성자|대화"로 처리/.test(sys) && !schema;
   const isQa = data && 'pass' in data;
   if (data) {
     await tool('Read', { file_path: 'README.md' }, '# project', false);

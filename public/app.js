@@ -103,6 +103,12 @@
     $('#newConvBtn').disabled = !S.snap.projectPath;
   }
 
+  function lastRoute(conv) {
+    if (!conv || !conv.items) return null;
+    for (let i = conv.items.length - 1; i >= 0; i--) { const x = conv.items[i]; if (x.type === 'route') return x.route; if (x.type === 'run') return 'run'; }
+    return null;
+  }
+
   function currentConv() { return S.convId ? S.snap.convs[S.convId] : null; }
 
   function renderMessages() {
@@ -118,8 +124,8 @@
     if (!conv || !conv.items.length) {
       const note = h('div', { class: 'empty-note' },
         h('b', {}, '무엇을 만들까요?'),
-        h('p', {}, '직접 작업은 평소 Claude Code처럼 개발자와 대화하며 고칩니다.'),
-        h('p', {}, '회사에 맡기면 대표가 규모를 판단하고, 필요하면 기획 → 완료 기준 합의 → 개발 → 독립 QA를 거쳐 결재를 올립니다.'));
+        h('p', {}, '질문이나 작은 수정은 개발자와 바로 대화로, 범위가 정해진 구현은 개발자 단독으로, 큰 일은 기획 → 완료 기준 합의 → 개발 → 독립 QA를 거치는 팀으로 처리합니다.'),
+        h('p', {}, '어떤 방식으로 할지는 대표가 메시지마다 판단합니다.'));
       if (!S.snap.isGit) {
         note.append(h('p', {}, '이 폴더는 git 저장소가 아니라서 변경사항 비교와 자동 커밋을 쓸 수 없습니다. ',
           h('button', { class: 'btn small', type: 'button', onclick: async () => { try { await api('/api/project/git-init', {}); await load(); } catch (e) { toast(e.message); } } }, 'git 초기화')));
@@ -136,6 +142,8 @@
     if (it.type === 'user') el = h('div', { class: 'msg-user' }, it.text);
     else if (it.type === 'notice') el = h('div', { class: 'msg-notice', 'data-tone': it.tone || 'info' }, it.text);
     else if (it.type === 'run') el = renderRunCard(it.runId);
+    else if (it.type === 'route') el = h('div', { class: 'msg-route', 'data-route': it.route },
+      h('span', { class: 'route-tag' }, it.forced ? '' : '대표 판단 · ', ROUTE_TEXT[it.route] || it.route), h('span', {}, it.reason || ''));
     else el = renderAssistant(it);
     el.dataset.itemId = it.id;
     S.itemEls.set(`${scope}:${it.id}`, el);
@@ -238,6 +246,7 @@
   }
 
   // ───────── 업무 카드 ─────────
+  const ROUTE_TEXT = { chat: '대화로 처리', solo: '개발자 단독', team: '팀 업무' };
   const STATUS_TEXT = { running: '진행 중', review: '결재 대기', done: '완료', failed: '실패', cancelled: '중지됨' };
   const STATUS_TONE = { running: 'lamp', review: 'lamp', done: 'good', failed: 'bad', cancelled: '' };
 
@@ -252,7 +261,6 @@
       h('span', { class: 'badge', 'data-tone': STATUS_TONE[r.status] }, STATUS_TEXT[r.status] || r.status)));
     const body = h('div', { class: 'run-body' });
     body.append(h('ol', { class: 'run-steps' }, r.stages.map((s) => h('li', { 'data-status': s.status }, s.label + (s.key === 'build' && r.round > 1 ? ` R${r.round}` : '')))));
-    if (r.triage && r.triage.reason) body.append(h('div', { class: 'run-reason' }, `대표: ${r.triage.reason}`));
     if (r.plan) body.append(h('div', {}, `명세: 기능 ${r.plan.features.length}개`, r.contract ? ` · 완료 기준 ${r.contract.criteria.length}개` : ''));
     if (qaLast) {
       body.append(h('div', {}, h('strong', {}, `QA 라운드 ${qaLast.round}: ${qaLast.pass ? '통과' : '반려'}`), ' ', qaLast.summary || ''));
@@ -346,24 +354,19 @@
   }
 
   // ───────── 입력창 ─────────
-  function mode() { return $('input[name="mode"]:checked').value; }
   function renderComposer() {
     const has = !!S.snap.projectPath;
     const conv = currentConv();
     const convBusy = !!(conv && S.snap.convList.find((c) => c.id === conv.id && c.busy));
     const run = S.snap.activeRunId && S.snap.runs[S.snap.activeRunId];
     const runBusy = run && run.status === 'running';
-    const m = mode();
     $('#input').disabled = !has;
-    $('#permMode').hidden = m !== 'direct';
-    $('#input').placeholder = m === 'direct'
-      ? '개발자에게 바로 시킬 일을 적으세요. Enter로 보내고 Shift+Enter로 줄을 바꿉니다.'
-      : '회사에 맡길 일을 적으세요. 대표가 규모를 판단해 팀을 꾸립니다.';
-    let hint = '';
+    const following = conv && conv.items && conv.items.some((x) => x.type === 'route' && x.route === 'chat') && lastRoute(conv) === 'chat';
+    let hint = following ? '이어지는 메시지는 개발자에게 바로 전달됩니다' : '';
     let block = !has;
-    if (m === 'direct' && runBusy) { hint = '회사 업무 중에는 직접 작업이 잠깁니다'; block = true; }
-    else if (m === 'company' && run && ['running', 'review'].includes(run.status)) { hint = '진행 중인 업무가 끝나면 맡길 수 있습니다'; block = true; }
-    else if (convBusy) { hint = '개발자가 응답 중입니다'; block = true; }
+    if (runBusy) { hint = '회사 업무 중입니다. 끝나면 보낼 수 있습니다'; block = true; }
+    else if (convBusy) { hint = lastRoute(conv) ? '응답 중입니다' : '대표가 처리 방식을 판단하는 중입니다'; block = true; }
+    else if (run && run.status === 'review') hint = '결재 대기 중에는 대화로만 처리됩니다';
     $('#composerHint').textContent = hint;
     $('#sendBtn').disabled = block;
     $('#stopBtn').hidden = !(convBusy || (run && run.convId === S.convId && ['running', 'review'].includes(run.status)));
@@ -375,7 +378,7 @@
     if (!text || $('#sendBtn').disabled) return;
     $('#sendBtn').disabled = true;
     try {
-      const r = await api('/api/chat/send', { convId: S.convId, text, mode: mode(), permissionMode: $('#permMode').value });
+      const r = await api('/api/chat/send', { convId: S.convId, text, permissionMode: $('#permMode').value });
       $('#input').value = '';
       if (r.convId !== S.convId) { S.convId = r.convId; if (!S.snap.convs[r.convId]) S.snap.convs[r.convId] = { id: r.convId, items: [], title: text.slice(0, 30) }; renderMessages(); }
     } catch (err) { toast(err.message); }
@@ -384,7 +387,6 @@
   $('#input').addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); $('#composer').requestSubmit(); }
   });
-  $$('input[name="mode"]').forEach((r) => r.addEventListener('change', renderComposer));
   $('#stopBtn').addEventListener('click', () => {
     const run = S.snap.activeRunId && S.snap.runs[S.snap.activeRunId];
     if (run && run.convId === S.convId && ['running', 'review'].includes(run.status)) api('/api/stop', { runId: run.id }).catch((e) => toast(e.message));
@@ -432,7 +434,7 @@
     const r = runId && S.snap.runs[runId];
     head.textContent = r ? `${role.name} · ${role.title} — 업무 "${r.title}"의 작업 기록` : `${role.name} · ${role.title}`;
     if (!r) {
-      log.append(h('div', { class: 'empty-note' }, h('b', {}, '아직 맡은 업무가 없습니다'), S.agent === 'dev' ? '직접 작업 대화는 대화 탭에서 볼 수 있습니다.' : '회사에 일을 맡기면 이 직원의 작업 과정이 여기에 실시간으로 쌓입니다.'));
+      log.append(h('div', { class: 'empty-note' }, h('b', {}, '아직 맡은 업무가 없습니다'), S.agent === 'dev' ? '대화로 처리한 작업은 대화 탭에서 볼 수 있습니다.' : '팀이나 단독 업무가 생기면 이 직원의 작업 과정이 여기에 실시간으로 쌓입니다.'));
       return;
     }
     if (!S.runTx[runId]) {
@@ -531,7 +533,8 @@
       h('label', { class: 'field' }, h('span', {}, 'claude 실행 파일 경로'),
         h('input', { type: 'text', name: 'claudePath', value: s.claudePath, disabled: S.snap.demo, spellcheck: 'false' }),
         h('small', {}, S.snap.demo ? '데모 모드에서는 모의 직원을 씁니다.' : 'PATH에 있으면 claude 그대로 두세요. 못 찾으면 claude.exe 전체 경로를 적습니다.')),
-      h('label', { class: 'field' }, h('span', {}, '업무 처리 방식'), sel('forceMode', [['auto', '대표가 판단'], ['solo', '항상 단독 처리'], ['team', '항상 팀 처리']], s.forceMode)),
+      h('label', { class: 'field' }, h('span', {}, '업무 처리 방식'), sel('forceMode', [['auto', '대표가 판단'], ['chat', '항상 대화'], ['solo', '항상 개발자 단독'], ['team', '항상 팀 업무']], s.forceMode),
+        h('small', {}, '보통은 대표에게 맡겨두세요. 고정하면 판단 단계를 건너뜁니다.')),
       h('label', { class: 'field' }, h('span', {}, 'QA 최대 반려 횟수'), h('input', { type: 'number', name: 'maxQaRounds', min: '1', max: '10', value: s.maxQaRounds })),
       h('label', { class: 'field' }, h('span', {}, '승인 시 자동 커밋'), sel('autoCommit', [['true', '켜기'], ['false', '끄기']], String(s.autoCommit)))));
 
@@ -546,7 +549,7 @@
     }
     f.append(roleFs);
 
-    f.append(h('fieldset', {}, h('legend', {}, '직접 작업 기본값'),
+    f.append(h('fieldset', {}, h('legend', {}, '대화로 처리할 때 기본값'),
       h('div', { class: 'row3 col-heads', 'aria-hidden': 'true' }, h('span', {}, '모델'), h('span', {}, '생각 강도'), h('span', {}, '도구 승인')),
       h('div', { class: 'row3' }, sel('direct.model', MODELS, s.direct.model), sel('direct.effort', EFFORTS, s.direct.effort), sel('direct.permissionMode', PMODES, s.direct.permissionMode))));
 

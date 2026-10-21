@@ -5,8 +5,8 @@ const os = require('os');
 const { ClaudeSession, newId } = require('./claude');
 const { Transcript, toolLabel } = require('./transcript');
 const { Run } = require('./pipeline');
-const { ROLES, PROMPTS } = require('./roles');
-const { readJson, writeFile } = require('./util');
+const { ROLES, PROMPTS, SCHEMAS, READ_ONLY_TOOLS } = require('./roles');
+const { readJson, writeFile, structuredFrom } = require('./util');
 
 const SAFE_BASH = [
   'Bash(npm test *)', 'Bash(npm run *)', 'Bash(npx tsc *)', 'Bash(npx vitest *)', 'Bash(npx jest *)',
@@ -19,10 +19,10 @@ const DEFAULT_SETTINGS = {
   claudePath: 'claude',
   maxQaRounds: 3,
   autoCommit: true,
-  forceMode: 'auto', // auto | solo | team
+  forceMode: 'auto', // auto(대표 판단) | chat | solo | team
   idleCloseMinutes: 20,
   roles: {
-    ceo: { model: 'sonnet', effort: 'low', permissionMode: 'manual', allowedTools: [] },
+    ceo: { model: 'sonnet', effort: 'low', permissionMode: 'manual', allowedTools: [] }, // 판단은 빠르고 가볍게
     planner: { model: 'opus', effort: 'high', permissionMode: 'manual', allowedTools: [] },
     dev: { model: 'opus', effort: 'high', permissionMode: 'acceptEdits', allowedTools: SAFE_BASH },
     qa: { model: 'opus', effort: 'high', permissionMode: 'manual', allowedTools: SAFE_BASH, tools: ['Read', 'Glob', 'Grep', 'Bash'] },
@@ -122,6 +122,7 @@ class Company {
         if (!d || !d.id) continue;
         const conv = this.makeConv(d.id, d.title, d.createdAt);
         conv.sessionId = d.sessionId || null;
+        conv.route = d.route || null;
         conv.transcript.items = d.items || [];
         this.convs.set(conv.id, conv);
       }
@@ -230,7 +231,7 @@ class Company {
     this.perms.delete(p.id);
   }
 
-  // ───────── 대화(직접 작업) ─────────
+  // ───────── 대화 ─────────
   makeConv(id, title, createdAt) {
     const conv = { id, title: title || '새 대화', createdAt: createdAt || Date.now(), sessionId: null, session: null, busy: false, idleTimer: null };
     conv.transcript = new Transcript((op, payload) => {
@@ -258,42 +259,98 @@ class Company {
       const gi = path.join(this.projectPath, '.company', '.gitignore');
       if (!fs.existsSync(gi)) writeFile(gi, '# 대화 기록과 실행 로그는 커밋하지 않습니다\nchats/\nruns/\n');
       writeFile(path.join(this.projectPath, '.company', 'chats', `${conv.id}.json`),
-        JSON.stringify({ id: conv.id, title: conv.title, createdAt: conv.createdAt, sessionId: conv.sessionId, items: conv.transcript.items }, null, 1));
+        JSON.stringify({ id: conv.id, title: conv.title, createdAt: conv.createdAt, sessionId: conv.sessionId, route: conv.route || null, items: conv.transcript.items }, null, 1));
     } catch { /* noop */ }
   }
 
   requireProject() { if (!this.projectPath) throw new Error('먼저 작업할 프로젝트 폴더를 여세요'); }
 
-  async sendMessage({ convId, text, mode, permissionMode, model }) {
+  /**
+   * 입력창은 하나. 대표가 메시지마다 처리 방식을 정한다.
+   * - chat: 개발자와 대화(평소 Claude Code처럼). 이어지는 메시지는 판단 없이 같은 세션으로 보낸다.
+   * - solo / team: 회사 업무(run)로 진행.
+   */
+  async sendMessage({ convId, text, permissionMode, model }) {
     this.requireProject();
     text = String(text || '').trim();
     if (!text) throw new Error('보낼 내용이 없습니다');
     let conv = convId && this.convs.get(convId);
     if (!conv) conv = this.newConv();
     if (conv.busy) throw new Error('이 대화는 아직 응답 중입니다');
+    const run = this.activeRun;
+    if (run && run.state.status === 'running') throw new Error('회사가 업무를 처리하는 중입니다. 같은 파일을 동시에 고치지 않도록 끝날 때까지 기다리거나 업무를 중지하세요');
     if (conv.title === '새 대화') { conv.title = text.split('\n')[0].slice(0, 30); this.broadcast('convs', this.convList()); }
+    conv.transcript.addUser(text);
+    const opts = { permissionMode, model };
 
-    if (mode === 'company') {
-      if (this.activeRun && ['running', 'review'].includes(this.activeRun.state.status)) throw new Error('이미 진행 중인 업무가 있습니다. 끝나거나 중지한 뒤 맡겨주세요');
-      conv.transcript.addUser(text);
-      const run = new Run(this, { request: text, convId: conv.id });
-      this.runs.set(run.id, run);
-      this.activeRun = run;
-      conv.transcript.push({ type: 'run', runId: run.id });
-      this.emitRun(run);
-      run.start();
-      return { convId: conv.id, runId: run.id };
+    // 대화 중인 흐름이면 판단 없이 이어서 보낸다(“아니 그거 말고”에 대표가 끼어들지 않게)
+    if (conv.route === 'chat' && (conv.session || conv.sessionId)) { this.sendChat(conv, text, opts); return { convId: conv.id }; }
+    // 결재 대기 중에는 회사 업무를 새로 열 수 없으므로 대화로 처리(결과물을 함께 다듬는 용도)
+    if (run && run.state.status === 'review') {
+      conv.transcript.push({ type: 'route', route: 'chat', reason: '결재 대기 중인 업무가 있어 대화로 처리합니다', forced: true });
+      this.sendChat(conv, text, opts);
+      return { convId: conv.id };
     }
 
-    if (this.activeRun && this.activeRun.state.status === 'running') throw new Error('회사가 업무 중이라 직접 작업은 잠시 막아뒀습니다(같은 파일을 동시에 고치지 않도록). 업무가 검토 단계에 오면 다시 시도하세요');
-    conv.transcript.addUser(text);
+    conv.busy = true;
+    this.broadcast('convs', this.convList());
+    (async () => {
+      let t;
+      const forced = this.settings.forceMode;
+      if (['chat', 'solo', 'team'].includes(forced)) t = { route: forced, title: text.split('\n')[0].slice(0, 20), reason: '설정에서 처리 방식을 고정해 두었습니다', forced: true };
+      else t = await this.triage(conv, text);
+      conv.busy = false;
+      if (conv.cancelTriage) { conv.cancelTriage = false; conv.transcript.addNotice('중지했습니다', 'warn'); this.broadcast('convs', this.convList()); return; }
+      conv.route = t.route;
+      conv.transcript.push({ type: 'route', route: t.route, reason: t.reason, forced: !!t.forced });
+      this.feed(`처리 방식: ${t.route === 'chat' ? '대화' : t.route === 'solo' ? '단독' : '팀'} · ${t.reason}`, 'ceo');
+      if (t.route === 'chat') { this.sendChat(conv, text, opts); return; }
+      if (this.activeRun && ['running', 'review'].includes(this.activeRun.state.status)) {
+        conv.transcript.addNotice('다른 업무가 진행 중이라 시작하지 못했습니다. 끝난 뒤 다시 보내주세요', 'error');
+        this.broadcast('convs', this.convList());
+        return;
+      }
+      const r = new Run(this, { request: text, convId: conv.id, triage: t });
+      this.runs.set(r.id, r);
+      this.activeRun = r;
+      conv.transcript.push({ type: 'run', runId: r.id });
+      this.broadcast('convs', this.convList());
+      this.emitRun(r);
+      r.start();
+    })().catch((e) => { conv.busy = false; conv.transcript.addNotice(e.message, 'error'); this.broadcast('convs', this.convList()); });
+    return { convId: conv.id };
+  }
+
+  /** 대표의 처리 방식 판단. 실패하면 가장 가벼운 '대화'로 진행한다. */
+  async triage(conv, text) {
+    const sess = this.createSession('ceo', {
+      systemPrompt: PROMPTS.ceo, schema: SCHEMAS.triage, tools: READ_ONLY_TOOLS, runId: 'triage', name: `대표 판단 · ${conv.title}`,
+    });
+    conv.triageSession = sess;
+    this.agentTranscript('triage', 'ceo').addNotice('처리 방식 판단', 'stage');
+    try {
+      const r = await sess.send(`다음 메시지의 처리 방식을 정하세요.\n\n<메시지>\n${text}\n</메시지>`);
+      const t = structuredFrom(r);
+      if (!t || !['chat', 'solo', 'team'].includes(t.route)) throw new Error('판단 결과를 읽지 못함');
+      this.setAgent('ceo', 'done', t.route === 'chat' ? '대화로' : t.route === 'solo' ? '단독으로' : '팀으로');
+      return { route: t.route, title: t.title || text.slice(0, 20), reason: t.reason || '' };
+    } catch (e) {
+      this.setAgent('ceo', 'idle', null);
+      return { route: 'chat', title: text.slice(0, 20), reason: `판단에 실패해 대화로 진행합니다(${e.message})` };
+    } finally {
+      conv.triageSession = null;
+      sess.close();
+    }
+  }
+
+  sendChat(conv, text, { permissionMode, model } = {}) {
     const d = this.settings.direct;
     const pm = permissionMode || d.permissionMode;
     const md = model !== undefined ? model : d.model;
     if (!conv.session || conv.session.closed) {
       conv.session = this.createSession('dev', {
         convId: conv.id, systemPrompt: PROMPTS.direct, resume: conv.sessionId, permissionMode: pm, model: md, effort: d.effort,
-        name: `직접 · ${conv.title}`,
+        name: `대화 · ${conv.title}`,
       });
       conv.pm = pm; conv.model = md;
     } else {
@@ -310,13 +367,14 @@ class Company {
       const mins = Number(this.settings.idleCloseMinutes) || 20;
       conv.idleTimer = setTimeout(() => { if (!conv.busy && conv.session) { conv.session.close(); conv.session = null; } }, mins * 60000);
     });
-    return { convId: conv.id };
   }
 
   stop({ convId, runId }) {
     if (runId) { const r = this.runs.get(runId); if (r && r.cancel) r.cancel(); return; }
     const c = convId && this.convs.get(convId);
-    if (c && c.session) c.session.interrupt();
+    if (!c) return;
+    if (c.triageSession) { c.cancelTriage = true; c.triageSession.interrupt(); return; }
+    if (c.session) c.session.interrupt();
   }
 
   deleteConv(convId) {

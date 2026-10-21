@@ -20,7 +20,8 @@ const STAGES = [
 class CancelledError extends Error { constructor() { super('작업이 중지되었습니다'); this.cancelled = true; } }
 
 class Run {
-  constructor(company, { request, convId }) {
+  constructor(company, { request, convId, triage }) {
+    this.presetTriage = triage || null;
     this.company = company;
     this.cwd = company.projectPath;
     this.dir = path.join(this.cwd, '.company');
@@ -110,7 +111,7 @@ class Run {
       appendFile(path.join(this.dir, 'progress.md'), `\n## ${new Date().toLocaleString('ko-KR')} 새 작업\n요청: ${this.state.request.replace(/\n/g, ' ').slice(0, 300)}\n`);
       this.emit();
 
-      await this.triage();
+      this.applyTriage(this.presetTriage || { route: 'team', title: this.state.title, reason: '판단 정보가 없어 팀으로 진행' });
       if (this.state.mode === 'solo') {
         for (const k of ['plan', 'contract', 'qa']) this.setStage(k, 'skipped');
         await this.build(1);
@@ -140,32 +141,14 @@ class Run {
     }
   }
 
-  async triage() {
-    this.setStage('triage', 'active');
-    this.log('새 업무 접수, 규모를 판단합니다', 'ceo');
-    let t = null;
-    try {
-      const { result } = await this.ask('ceo', {
-        label: '접수',
-        systemKey: 'ceo',
-        schema: SCHEMAS.triage,
-        tools: READ_ONLY_TOOLS,
-        prompt: `다음 코딩 요청의 처리 방식을 판단하세요.\n\n<요청>\n${this.state.request}\n</요청>`,
-      });
-      t = structuredFrom(result);
-    } catch (e) {
-      if (e.cancelled) throw e;
-      this.log(`규모 판단 실패(${e.message}), 팀 모드로 진행합니다`, 'ceo', 'warn');
-    }
-    const forced = this.company.settings.forceMode;
-    if (!t || !['solo', 'team'].includes(t.mode)) t = { mode: 'team', title: this.state.title, reason: '판단 결과를 읽지 못해 기본값(팀)으로 진행' };
-    if (forced === 'solo' || forced === 'team') t = { ...t, mode: forced, reason: `설정에 따라 ${forced === 'solo' ? '단독' : '팀'} 모드로 고정` };
+  /** 대표의 판단(회사 차원에서 이미 내려짐)을 업무에 반영한다. */
+  applyTriage(t) {
+    const mode = t.route === 'team' ? 'team' : 'solo';
     this.state.triage = t;
-    this.state.mode = t.mode;
+    this.state.mode = mode;
     if (t.title) this.state.title = t.title.slice(0, 40);
     this.setStage('triage', 'done');
-    this.log(t.mode === 'solo' ? `단독 처리로 결정: ${t.reason}` : `팀 프로젝트로 결정: ${t.reason}`, 'ceo');
-    this.company.handoff('ceo', t.mode === 'solo' ? 'dev' : 'planner');
+    this.company.handoff('ceo', mode === 'solo' ? 'dev' : 'planner');
   }
 
   async plan() {

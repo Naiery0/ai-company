@@ -49,13 +49,9 @@
         </div>
         <div id="messages" class="messages"></div>
         <form id="composer" class="composer" autocomplete="off">
-          <div class="mode-switch" role="radiogroup" aria-label="작업 방식">
-            <label><input type="radio" name="mode" value="direct" checked /><span>직접 작업</span></label>
-            <label><input type="radio" name="mode" value="company" /><span>회사에 맡기기</span></label>
-          </div>
-          <textarea id="input" rows="3" placeholder="개발자에게 바로 시킬 일을 적으세요. Enter로 보내고 Shift+Enter로 줄을 바꿉니다."></textarea>
+          <textarea id="input" rows="3" placeholder="무엇이든 적으세요. 대표가 대화·단독·팀 중 처리 방식을 정합니다. Enter로 보내고 Shift+Enter로 줄을 바꿉니다."></textarea>
           <div class="composer-foot">
-            <select id="permMode" aria-label="권한 모드" title="직접 작업 때 도구 승인 방식">
+            <select id="permMode" aria-label="대화로 처리할 때 도구 승인 방식" title="대화로 처리할 때 도구 승인 방식">
               <option value="manual">매번 묻기</option>
               <option value="acceptEdits">파일 수정 자동 허용</option>
               <option value="auto">자동 판단</option>
