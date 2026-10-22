@@ -104,6 +104,7 @@ const routes = {
   'POST /api/chat/send': async (b) => company.sendMessage(b),
   'POST /api/chat/new': async () => { const c = company.newConv(); return { convId: c.id }; },
   'POST /api/chat/delete': async (b) => { company.deleteConv(b.convId); return { ok: true }; },
+  'POST /api/chat/retry': async (b) => company.retryLast(b.convId),
   'POST /api/stop': async (b) => { company.stop(b); return { ok: true }; },
   'POST /api/permission': async (b) => { company.respondPermission(b.permId, b.decision, b.message); return { ok: true }; },
 
@@ -147,8 +148,9 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store', Connection: 'keep-alive' });
     res.write(': hi\n\n');
     company.clients.add(res);
+    autoExit.onConnect();
     const ping = setInterval(() => { try { res.write(': ping\n\n'); } catch { /* noop */ } }, 20000);
-    req.on('close', () => { clearInterval(ping); company.clients.delete(res); });
+    req.on('close', () => { clearInterval(ping); company.clients.delete(res); autoExit.onDisconnect(); });
     return;
   }
 
@@ -172,18 +174,54 @@ const server = http.createServer(async (req, res) => {
   fs.createReadStream(file).pipe(res);
 });
 
-server.listen(PORT, HOST, () => {
-  if (process.argv.includes('--open')) {
-    const url = `http://localhost:${PORT}`;
-    const { spawn } = require('child_process');
-    const opener = process.platform === 'win32' ? ['cmd', ['/c', 'start', '', url]] : process.platform === 'darwin' ? ['open', [url]] : ['xdg-open', [url]];
-    try { spawn(opener[0], opener[1], { detached: true, stdio: 'ignore', windowsHide: true }).unref(); } catch { /* noop */ }
-  }
-  console.log(`\n  가상 회사 사무실이 열렸습니다 → http://localhost:${PORT}${DEMO ? '   (데모 모드: 실제 claude 대신 모의 직원이 일합니다)' : ''}\n`);
-});
+function openBrowser() {
+  const url = `http://localhost:${PORT}`;
+  const { spawn } = require('child_process');
+  const opener = process.platform === 'win32' ? ['cmd', ['/c', 'start', '', url]] : process.platform === 'darwin' ? ['open', [url]] : ['xdg-open', [url]];
+  try { spawn(opener[0], opener[1], { detached: true, stdio: 'ignore', windowsHide: true }).unref(); } catch { /* noop */ }
+}
 
-process.on('SIGINT', () => {
+function shutdown(reason) {
+  console.log(`  서버를 끕니다: ${reason}`);
   company.flushSaves();
   for (const c of company.convs.values()) if (c.session) c.session.kill();
   process.exit(0);
+}
+
+// --exit-when-closed: 브라우저 탭이 모두 닫히면 서버도 끈다(창 없이 띄운 경우용).
+// 새로고침·재접속을 위해 잠시 기다리고, 업무가 진행 중이거나 결재를 기다리면 끝날 때까지 미룬다.
+const autoExit = (() => {
+  const on = process.argv.includes('--exit-when-closed');
+  const GRACE = 10000, RECHECK = 15000, FIRST = 120000;
+  let timer = null, everConnected = false;
+  const check = () => {
+    timer = null;
+    if (company.clients.size) return;
+    if (company.isBusy()) { timer = setTimeout(check, RECHECK); return; }
+    shutdown('브라우저 탭이 모두 닫힘');
+  };
+  return {
+    start() { if (on) timer = setTimeout(() => { if (!everConnected) check(); }, FIRST); },
+    onConnect() { everConnected = true; clearTimeout(timer); timer = null; },
+    onDisconnect() { if (on && !company.clients.size) { clearTimeout(timer); timer = setTimeout(check, GRACE); } },
+  };
+})();
+
+server.on('error', (e) => {
+  // 이미 켜져 있으면 새로 띄우지 않고 브라우저만 연다
+  if (e.code === 'EADDRINUSE') {
+    console.log(`  이미 ${PORT}번 포트에서 실행 중입니다.`);
+    if (process.argv.includes('--open')) openBrowser();
+    process.exit(0);
+  }
+  console.error(e);
+  process.exit(1);
 });
+
+server.listen(PORT, HOST, () => {
+  if (process.argv.includes('--open')) openBrowser();
+  autoExit.start();
+  console.log(`\n  가상 회사 사무실이 열렸습니다 → http://localhost:${PORT}${DEMO ? '   (데모 모드: 실제 claude 대신 모의 직원이 일합니다)' : ''}\n`);
+});
+
+process.on('SIGINT', () => shutdown('Ctrl+C'));

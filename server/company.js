@@ -2,7 +2,7 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { ClaudeSession, newId } = require('./claude');
+const { ClaudeSession, probeInit, newId } = require('./claude');
 const { Transcript, toolLabel } = require('./transcript');
 const { Run } = require('./pipeline');
 const { ROLES, PROMPTS, SCHEMAS, READ_ONLY_TOOLS } = require('./roles');
@@ -25,10 +25,10 @@ const DEFAULT_SETTINGS = {
   roles: {
     ceo: { model: 'sonnet', effort: 'low', permissionMode: 'manual', allowedTools: [] }, // 판단은 빠르고 가볍게
     planner: { model: 'opus', effort: 'high', permissionMode: 'manual', allowedTools: [] },
-    dev: { model: 'opus', effort: 'high', permissionMode: 'acceptEdits', allowedTools: SAFE_BASH },
-    qa: { model: 'opus', effort: 'high', permissionMode: 'manual', allowedTools: SAFE_BASH, tools: ['Read', 'Glob', 'Grep', 'Bash'] },
+    dev: { model: 'opus', effort: 'high', permissionMode: 'auto', allowedTools: SAFE_BASH },
+    qa: { model: 'opus', effort: 'high', permissionMode: 'auto', allowedTools: SAFE_BASH, tools: ['Read', 'Glob', 'Grep', 'Bash'] },
   },
-  direct: { model: '', effort: '', permissionMode: 'acceptEdits' },
+  direct: { model: '', effort: '', permissionMode: 'auto' }, // 자동 판단: 평소 Claude Code 기본값과 같게(위험해 보이는 것만 묻는다)
 };
 
 function deepMerge(base, over) {
@@ -58,6 +58,7 @@ class Company {
     this.runTranscripts = new Map();
     this.perms = new Map();
     this.subs = new Map(); // 진행 중인 서브에이전트(사무실의 임시 직원)
+    this.commands = []; // Claude Code 슬래시 명령 목록(입력창 자동 완성)
     this.feedLog = [];
     this.activeRun = null;
     if (this.demo) this.settings.claudePath = path.join(appDir, 'tools', 'mock-claude.js');
@@ -114,6 +115,7 @@ class Company {
     this.runTranscripts = new Map();
     this.loadProjectData();
     this.saveAppState();
+    this.refreshCommands().catch(() => {});
     this.broadcast('reload', {});
   }
 
@@ -168,6 +170,7 @@ class Company {
       if (ev.kind === 'stderr' && /error|fail/i.test(ev.text) && !/warn/i.test(ev.text)) {
         this.broadcast('log', { agentId, text: ev.text.slice(0, 500) });
       }
+      if (ev.kind === 'init_info') this.setCommands(ev.info);
       if (ev.kind === 'init' && opt.convId) {
         const c = this.convs.get(opt.convId);
         if (c) { c.sessionId = ev.sessionId; this.saveConv(c); }
@@ -300,17 +303,59 @@ class Company {
 
   requireProject() { if (!this.projectPath) throw new Error('먼저 작업할 프로젝트 폴더를 여세요'); }
 
+  /** 실패한 마지막 메시지를 다시 보낸다(원인을 고친 뒤 같은 요청을 다시 입력하지 않아도 되게). */
+  retryLast(convId) {
+    const conv = this.convs.get(convId);
+    if (!conv) throw new Error('대화를 찾을 수 없습니다');
+    if (conv.busy) throw new Error('이 대화는 아직 응답 중입니다');
+    const last = [...conv.transcript.items].reverse().find((x) => x.type === 'user');
+    if (!last) throw new Error('다시 보낼 메시지가 없습니다');
+    conv.transcript.addNotice('다시 보냅니다', 'info');
+    return this.sendMessage({ convId, text: last.text, retry: true });
+  }
+
+  /** 진행 중이거나 사람의 결재를 기다리는 일이 있는가(서버 자동 종료 판단용). */
+  isBusy() {
+    if (this.activeRun && ['running', 'review'].includes(this.activeRun.state.status)) return true;
+    for (const c of this.convs.values()) if (c.busy) return true;
+    return false;
+  }
+
+  // ───────── 슬래시 명령 ─────────
+  isSlashCommand(text) {
+    const m = /^\/([\w:.-]+)(\s|$)/.exec(text);
+    return !!(m && this.commands.some((c) => c.name === m[1]));
+  }
+
+  /** 지금 프로젝트에서 쓸 수 있는 Claude Code 명령 목록을 받아 온다(initialize만 보내므로 사용량 0). */
+  async refreshCommands() {
+    if (!this.projectPath) return;
+    const seq = (this.cmdSeq = (this.cmdSeq || 0) + 1);
+    const info = await probeInit({ claudePath: this.settings.claudePath, cwd: this.projectPath });
+    if (seq !== this.cmdSeq) return; // 그 사이 프로젝트·경로가 바뀜
+    this.setCommands(info);
+  }
+
+  setCommands(info) {
+    if (!info || !Array.isArray(info.commands)) return;
+    this.commands = info.commands
+      .filter((c) => c && c.name && !/^__/.test(c.name) && !/^\(removed\)|^Renamed/.test(c.description || ''))
+      .map((c) => ({ name: c.name, hint: c.argumentHint || '', description: String(c.description || '').slice(0, 140) }));
+    this.broadcast('commands', this.commands);
+  }
+
   /**
    * 입력창은 하나. 대표가 메시지마다 처리 방식을 정한다.
    * - chat: 개발자와 대화(평소 Claude Code처럼). 이어지는 메시지는 판단 없이 같은 세션으로 보낸다.
    * - solo / team: 회사 업무(run)로 진행.
    */
-  async sendMessage({ convId, text, permissionMode, model }) {
+  async sendMessage({ convId, text, permissionMode, model, retry = false }) {
     this.requireProject();
     text = String(text || '').trim();
     if (!text) throw new Error('보낼 내용이 없습니다');
     let conv = convId && this.convs.get(convId);
     if (!conv) conv = this.newConv();
+    const isCommand = this.isSlashCommand(text);
     if (conv.busy) {
       // 개발자와 대화 중이면 막지 않고 대기열에 넣었다가 응답이 끝나면 이어서 보낸다
       if (conv.route === 'chat' && conv.session && !conv.triageSession) {
@@ -323,11 +368,20 @@ class Company {
     const run = this.activeRun;
     if (run && run.state.status === 'running') throw new Error('회사가 업무를 처리하는 중입니다. 같은 파일을 동시에 고치지 않도록 끝날 때까지 기다리거나 업무를 중지하세요');
     if (conv.title === '새 대화') { conv.title = text.split('\n')[0].slice(0, 30); this.broadcast('convs', this.convList()); }
-    conv.transcript.addUser(text);
+    if (!retry) conv.transcript.addUser(text);
     const opts = { permissionMode, model };
 
-    // 대화 중인 흐름이면 판단 없이 이어서 보낸다(“아니 그거 말고”에 대표가 끼어들지 않게)
-    if (conv.route === 'chat' && (conv.session || conv.sessionId)) { this.sendChat(conv, text, opts); return { convId: conv.id }; }
+    // 대화 중인 흐름이면 판단 없이 이어서 보낸다(“아니 그거 말고”에 대표가 끼어들지 않게).
+    // 세션이 한 번도 실제로 시작되지 못했으면(실행 실패 등) 다시 판단한다.
+    const chatAlive = conv.sessionId || (conv.session && !conv.session.closed);
+    if (conv.route === 'chat' && chatAlive) { this.sendChat(conv, text, opts); return { convId: conv.id }; }
+    // Claude Code 슬래시 명령은 판단 없이 개발자 세션에 그대로 전달한다
+    if (isCommand) {
+      if (conv.route !== 'chat') conv.transcript.push({ type: 'route', route: 'chat', reason: '명령어는 개발 팀장 세션에 바로 전달합니다', forced: true });
+      conv.route = 'chat';
+      this.sendChat(conv, text, opts);
+      return { convId: conv.id };
+    }
     // 결재 대기 중에는 회사 업무를 새로 열 수 없으므로 대화로 처리(결과물을 함께 다듬는 용도)
     if (run && run.state.status === 'review') {
       conv.transcript.push({ type: 'route', route: 'chat', reason: '결재 대기 중인 업무가 있어 대화로 처리합니다', forced: true });
@@ -505,6 +559,7 @@ class Company {
       activeRunId: this.activeRun ? this.activeRun.id : null,
       perms: [...this.perms.values()].map((p) => this.publicPerm(p)),
       subs: [...this.subs.values()].map(({ session, ...s }) => s),
+      commands: this.commands,
       feed: this.feedLog.slice(-60),
       home: os.homedir(),
       platform: process.platform,
@@ -512,10 +567,12 @@ class Company {
   }
 
   updateSettings(patch) {
+    const prevPath = this.settings.claudePath;
     this.settings = deepMerge(this.settings, patch || {});
     if (this.demo) this.settings.claudePath = path.join(this.appDir, 'tools', 'mock-claude.js');
     this.saveAppState();
     this.broadcast('settings', this.settings);
+    if (this.settings.claudePath !== prevPath) this.refreshCommands().catch(() => {});
   }
 }
 

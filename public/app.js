@@ -20,6 +20,7 @@
     snap: null, convId: null, tab: 'chat', agent: 'dev', viewRunId: null,
     runTx: {}, // runId → {agentId: items}
     itemEls: new Map(), pendingRender: new Set(), fileRel: null,
+    busySince: {}, // convId → 응답 대기 시작 시각(경과 시간 표시용)
   };
 
   async function api(path, body) {
@@ -39,6 +40,7 @@
   async function load() {
     S.snap = await api('/api/state');
     const snap = S.snap;
+    for (const c of snap.convList) if (c.busy && !S.busySince[c.id]) S.busySince[c.id] = Date.now();
     Office.setRoles(snap.roles);
     Office.setAgents(snap.agents);
     Office.setActive(!!snap.projectPath);
@@ -47,7 +49,7 @@
     Office.setRun(S.viewRunId ? snap.runs[S.viewRunId] : null);
     Office.setSubs(snap.subs);
     Office.setDocs(docCount());
-    $('#permMode').value = snap.settings.direct.permissionMode || 'acceptEdits';
+    $('#permMode').value = snap.settings.direct.permissionMode || 'auto';
     renderAll();
   }
 
@@ -70,6 +72,7 @@
     renderFeed();
     renderPerms();
     renderComposer();
+    renderStatus();
     if (S.tab === 'agent') renderAgentPane();
     if (S.tab === 'files') renderFiles();
     if (S.tab === 'settings') renderSettings();
@@ -135,7 +138,7 @@
     if (!conv || !conv.items.length) {
       const note = h('div', { class: 'empty-note' },
         h('b', {}, '무엇을 만들까요?'),
-        h('p', {}, '질문이나 작은 수정은 개발자와 바로 대화로, 범위가 정해진 구현은 개발자 단독으로, 큰 일은 기획 → 완료 기준 합의 → 개발 → 독립 QA를 거치는 팀으로 처리합니다.'),
+        h('p', {}, '질문이나 작은 수정은 개발 팀장과 바로 대화로, 범위가 정해진 구현은 개발 팀장 단독으로, 큰 일은 기획 → 완료 기준 합의 → 개발 → 독립 QA를 거치는 팀으로 처리합니다.'),
         h('p', {}, '어떤 방식으로 할지는 대표가 메시지마다 판단합니다.'));
       if (!S.snap.isGit) {
         note.append(h('p', {}, '이 폴더는 git 저장소가 아니라서 변경사항 비교와 자동 커밋을 쓸 수 없습니다. ',
@@ -247,6 +250,7 @@
         box.scrollTop = box.scrollHeight;
       } else scheduleItemRender('chat', e.item);
       if (e.item.meta) renderTop();
+      renderStatus();
     } else if (e.op === 'delta') {
       const it = conv.items.find((x) => x.id === e.itemId);
       if (!it) return;
@@ -257,7 +261,7 @@
   }
 
   // ───────── 업무 카드 ─────────
-  const ROUTE_TEXT = { chat: '대화로 처리', solo: '개발자 단독', team: '팀 업무' };
+  const ROUTE_TEXT = { chat: '대화로 처리', solo: '개발 팀장 단독', team: '팀 업무' };
   const STATUS_TEXT = { running: '진행 중', review: '결재 대기', done: '완료', failed: '실패', cancelled: '중지됨', discarded: '폐기됨' };
   const STATUS_TONE = { running: 'lamp', review: 'lamp', done: 'good', failed: 'bad', cancelled: '' };
 
@@ -323,6 +327,7 @@
     renderStage();
     renderTop();
     renderComposer();
+    renderStatus();
   }
 
   function discardRun(runId) {
@@ -399,7 +404,7 @@
     const runBusy = run && run.status === 'running';
     $('#input').disabled = !has;
     const following = conv && conv.items && conv.items.some((x) => x.type === 'route' && x.route === 'chat') && lastRoute(conv) === 'chat';
-    let hint = following ? '이어지는 메시지는 개발자에게 바로 전달됩니다' : '';
+    let hint = following ? '이어지는 메시지는 개발 팀장에게 바로 전달됩니다' : '';
     let block = !has;
     if (runBusy) { hint = '회사 업무 중입니다. 끝나면 보낼 수 있습니다'; block = true; }
     else if (convBusy && following) hint = '응답 중입니다. 지금 보내면 응답이 끝난 뒤 이어서 전달됩니다';
@@ -409,6 +414,116 @@
     $('#sendBtn').disabled = block;
     $('#stopBtn').hidden = !(convBusy || (run && run.convId === S.convId && ['running', 'review'].includes(run.status)));
   }
+
+  // ───────── 진행 상황 줄(응답을 기다리는 동안 누가 무엇을 하는지) ─────────
+  const STAGE_TEXT = { triage: '접수', plan: '기획', contract: '완료 기준 합의', build: '개발', qa: 'QA 검사', review: '결재 대기' };
+  const elapsed = (ms) => { const s = Math.max(0, Math.floor(ms / 1000)); return s < 60 ? `${s}초` : `${Math.floor(s / 60)}분 ${s % 60}초`; };
+  function agentLine(id) {
+    const a = S.snap.agents[id] || {};
+    const name = S.snap.roles[id] ? S.snap.roles[id].name : id;
+    if (a.state === 'waiting') return { what: `${name}: 도구 사용 승인을 기다립니다. 오른쪽 위 카드에서 허용하거나 거부하세요`, tone: 'wait' };
+    if (a.state === 'working') return { what: `${name}: ${a.bubble || '작업 중'}` };
+    if (a.state === 'thinking') return { what: `${name}: ${a.bubble && !/^생각 중/.test(a.bubble) ? a.bubble : '생각 중'}` };
+    return { what: `${name}: 준비 중` };
+  }
+  function lastFailed(conv) {
+    const it = conv && conv.items && conv.items[conv.items.length - 1];
+    if (!it) return false;
+    if (it.type === 'notice') return it.tone === 'error';
+    if (it.type === 'run') { const r = S.snap.runs[it.runId]; return !!(r && r.status === 'failed'); }
+    if (it.type === 'assistant') return !!(it.done && it.meta && it.meta.isError);
+    return false;
+  }
+  function renderStatus() {
+    const el = $('#chatStatus');
+    const conv = currentConv();
+    if (!conv || !S.snap.projectPath) { el.hidden = true; return; }
+    const run = S.snap.activeRunId && S.snap.runs[S.snap.activeRunId];
+    const runHere = run && run.convId === conv.id;
+    const busy = !!S.snap.convList.find((c) => c.id === conv.id && c.busy);
+    let line = null, since = null, retry = false;
+    if (runHere && run.status === 'running') {
+      const st = run.stages.find((s) => s.key === run.stage);
+      const head = `${run.mode === 'team' ? '팀 업무' : run.mode === 'solo' ? '단독 업무' : '업무'} · ${STAGE_TEXT[run.stage] || run.stage}${run.stage === 'build' && run.round > 1 ? ` R${run.round}` : ''}`;
+      // 단계 담당자가 쉬고 있으면 실제로 일하는 직원을 보여준다(예: 완료 기준 합의는 개발자 제안 → QA 확정)
+      const active = (id) => ['thinking', 'working', 'waiting'].includes((S.snap.agents[id] || {}).state);
+      const who = st && st.agent && active(st.agent) ? st.agent : Object.keys(S.snap.roles).find(active);
+      const sub = run.checking ? { what: '확인 명령 실행 중' } : who ? agentLine(who) : { what: '진행 중' };
+      line = { what: `${head} — ${sub.what}`, tone: sub.tone };
+      since = run.createdAt;
+    } else if (runHere && run.status === 'review') {
+      line = { what: '결재를 기다립니다. 업무 카드에서 승인·반려·폐기를 고르세요', tone: 'wait' };
+    } else if (busy) {
+      line = lastRoute(conv) ? agentLine('dev') : { what: `대표가 처리 방식을 정하는 중${(S.snap.agents.ceo || {}).bubble && S.snap.agents.ceo.state === 'working' ? ` — ${S.snap.agents.ceo.bubble}` : ''}` };
+      since = S.busySince[conv.id];
+    } else if (lastFailed(conv)) {
+      line = { what: '실패했습니다. 원인을 고친 뒤 같은 요청을 다시 보낼 수 있습니다', tone: 'fail' };
+      retry = true;
+    }
+    if (!line) { el.hidden = true; return; }
+    el.hidden = false;
+    el.dataset.tone = line.tone || '';
+    el.innerHTML = '';
+    el.append(h('span', { class: 'dot', 'aria-hidden': 'true' }), h('span', { class: 'what', title: line.what }, line.what));
+    if (since) el.append(h('span', { class: 'time' }, elapsed(Date.now() - since)));
+    if (retry) el.append(h('button', { class: 'btn small', type: 'button', onclick: retryLast }, '다시 보내기'));
+  }
+  async function retryLast() {
+    try { await api('/api/chat/retry', { convId: S.convId }); } catch (e) { toast(e.message); }
+  }
+  setInterval(() => { if (!$('#chatStatus').hidden && $('#chatStatus').dataset.tone !== 'fail') renderStatus(); }, 1000);
+
+  // ───────── 슬래시 명령 자동 완성 ─────────
+  const CMD = { items: [], idx: 0 };
+  const cmdOpen = () => !$('#cmdPop').hidden;
+  function closeCmd() { $('#cmdPop').hidden = true; CMD.items = []; $('#input').removeAttribute('aria-activedescendant'); }
+  function updateCmdPop() {
+    const m = /^\/([\w:.-]*)$/.exec($('#input').value);
+    const list = S.snap.commands || [];
+    if (!m || !list.length) return closeCmd();
+    const q = m[1].toLowerCase();
+    const starts = list.filter((c) => c.name.toLowerCase().startsWith(q));
+    const rest = list.filter((c) => !c.name.toLowerCase().startsWith(q) && c.name.toLowerCase().includes(q));
+    const items = [...starts, ...rest].slice(0, 40);
+    if (!items.length) return closeCmd();
+    if (CMD.items.length !== items.length || CMD.items[0] !== items[0]) CMD.idx = 0;
+    CMD.items = items;
+    renderCmdPop();
+  }
+  function renderCmdPop() {
+    const ul = $('#cmdPop');
+    ul.innerHTML = '';
+    CMD.items.forEach((c, i) => {
+      const li = h('li', { id: `cmd-${i}`, role: 'option', 'aria-selected': String(i === CMD.idx), onmousedown: (e) => { e.preventDefault(); pickCmd(i); } },
+        h('span', { class: 'cname' }, '/' + c.name), h('span', { class: 'chint' }, c.hint || ''), c.description ? h('span', { class: 'cdesc' }, c.description) : null);
+      ul.append(li);
+    });
+    ul.hidden = false;
+    $('#input').setAttribute('aria-activedescendant', `cmd-${CMD.idx}`);
+    const sel = ul.children[CMD.idx];
+    if (sel) sel.scrollIntoView({ block: 'nearest' });
+  }
+  function pickCmd(i) {
+    const c = CMD.items[i];
+    if (!c) return;
+    $('#input').value = '/' + c.name + ' ';
+    closeCmd();
+    $('#input').focus();
+  }
+  function handleCmdKey(e) {
+    if (!cmdOpen()) return false;
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      CMD.idx = (CMD.idx + (e.key === 'ArrowDown' ? 1 : -1) + CMD.items.length) % CMD.items.length;
+      renderCmdPop();
+      return true;
+    }
+    if ((e.key === 'Enter' && !e.shiftKey && !e.isComposing) || e.key === 'Tab') { e.preventDefault(); pickCmd(CMD.idx); return true; }
+    if (e.key === 'Escape') { e.preventDefault(); closeCmd(); return true; }
+    return false;
+  }
+  $('#input').addEventListener('input', updateCmdPop);
+  $('#input').addEventListener('blur', () => setTimeout(closeCmd, 100));
 
   $('#composer').addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -423,6 +538,7 @@
     renderComposer();
   });
   $('#input').addEventListener('keydown', (e) => {
+    if (handleCmdKey(e)) return;
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); $('#composer').requestSubmit(); }
   });
   $('#stopBtn').addEventListener('click', () => {
@@ -430,9 +546,9 @@
     if (run && run.convId === S.convId && ['running', 'review'].includes(run.status)) api('/api/stop', { runId: run.id }).catch((e) => toast(e.message));
     else api('/api/stop', { convId: S.convId }).catch((e) => toast(e.message));
   });
-  $('#convSelect').addEventListener('change', (e) => { S.convId = e.target.value || null; renderMessages(); renderComposer(); });
+  $('#convSelect').addEventListener('change', (e) => { S.convId = e.target.value || null; renderMessages(); renderComposer(); renderStatus(); });
   $('#newConvBtn').addEventListener('click', async () => {
-    try { const r = await api('/api/chat/new', {}); S.convId = r.convId; S.snap.convs[r.convId] = { id: r.convId, items: [], title: '새 대화', createdAt: Date.now() }; renderMessages(); renderComposer(); $('#input').focus(); } catch (e) { toast(e.message); }
+    try { const r = await api('/api/chat/new', {}); S.convId = r.convId; S.snap.convs[r.convId] = { id: r.convId, items: [], title: '새 대화', createdAt: Date.now() }; renderMessages(); renderComposer(); renderStatus(); $('#input').focus(); } catch (e) { toast(e.message); }
   });
 
   // ───────── 탭 ─────────
@@ -571,13 +687,13 @@
       h('label', { class: 'field' }, h('span', {}, 'claude 실행 파일 경로'),
         h('input', { type: 'text', name: 'claudePath', value: s.claudePath, disabled: S.snap.demo, spellcheck: 'false' }),
         h('small', {}, S.snap.demo ? '데모 모드에서는 모의 직원을 씁니다.' : 'PATH에 있으면 claude 그대로 두세요. 못 찾으면 claude.exe 전체 경로를 적습니다.')),
-      h('label', { class: 'field' }, h('span', {}, '업무 처리 방식'), sel('forceMode', [['auto', '대표가 판단'], ['chat', '항상 대화'], ['solo', '항상 개발자 단독'], ['team', '항상 팀 업무']], s.forceMode),
+      h('label', { class: 'field' }, h('span', {}, '업무 처리 방식'), sel('forceMode', [['auto', '대표가 판단'], ['chat', '항상 대화'], ['solo', '항상 개발 팀장 단독'], ['team', '항상 팀 업무']], s.forceMode),
         h('small', {}, '보통은 대표에게 맡겨두세요. 고정하면 판단 단계를 건너뜁니다.')),
       h('label', { class: 'field' }, h('span', {}, 'QA 최대 반려 횟수'), h('input', { type: 'number', name: 'maxQaRounds', min: '1', max: '10', value: s.maxQaRounds }),
         h('small', {}, '단독 업무에서 확인 명령이 실패할 때 다시 맡기는 횟수에도 쓰입니다.')),
       h('label', { class: 'field' }, h('span', {}, '단독 업무 확인 명령'),
         h('input', { type: 'text', name: 'checkCommand', value: s.checkCommand || '', placeholder: '비우면 package.json의 test 스크립트(npm test)를 찾아 씁니다', spellcheck: 'false' }),
-        h('small', {}, '개발자가 끝내면 회사가 이 명령을 직접 실행해 확인합니다(사용량 0). 실패하면 출력과 함께 개발자에게 돌려보냅니다.')),
+        h('small', {}, '개발 팀장이 끝내면 회사가 이 명령을 직접 실행해 확인합니다(사용량 0). 실패하면 출력과 함께 개발 팀장에게 돌려보냅니다.')),
       h('label', { class: 'field' }, h('span', {}, '승인 시 자동 커밋'), sel('autoCommit', [['true', '켜기'], ['false', '끄기']], String(s.autoCommit)))));
 
     const roleFs = h('fieldset', {}, h('legend', {}, '직원별 설정'),
@@ -681,6 +797,7 @@
       const a = JSON.parse(e.data);
       S.snap.agents[a.id] = a; Office.setAgent(a);
       if (S.tab === 'agent') renderChips();
+      renderStatus();
     });
     es.addEventListener('chat', (e) => onChat(JSON.parse(e.data)));
     es.addEventListener('convs', (e) => {
@@ -688,9 +805,11 @@
       for (const c of list) {
         const old = S.snap.convList.find((x) => x.id === c.id);
         if (old && old.busy && !c.busy && lastRoute(S.snap.convs[c.id]) === 'chat') notify('응답 완료', c.title, `conv-${c.id}`);
+        if (c.busy && !(old && old.busy)) S.busySince[c.id] = Date.now();
       }
-      S.snap.convList = list; renderConvSelect(); renderComposer();
+      S.snap.convList = list; renderConvSelect(); renderComposer(); renderStatus();
     });
+    es.addEventListener('commands', (e) => { S.snap.commands = JSON.parse(e.data); });
     es.addEventListener('run', (e) => onRun(JSON.parse(e.data)));
     es.addEventListener('transcript', (e) => onTranscript(JSON.parse(e.data)));
     es.addEventListener('perm', (e) => onPerm(JSON.parse(e.data)));

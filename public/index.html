@@ -49,8 +49,10 @@
           <button class="btn small" type="button" id="newConvBtn">새 대화</button>
         </div>
         <div id="messages" class="messages"></div>
+        <div id="chatStatus" class="chat-status" role="status" aria-live="polite" hidden></div>
         <form id="composer" class="composer" autocomplete="off">
-          <textarea id="input" rows="3" placeholder="무엇이든 적으세요. 대표가 대화·단독·팀 중 처리 방식을 정합니다. Enter로 보내고 Shift+Enter로 줄을 바꿉니다."></textarea>
+          <ul id="cmdPop" class="cmd-pop" role="listbox" aria-label="명령어" hidden></ul>
+          <textarea id="input" rows="3" placeholder="무엇이든 적으세요. 대표가 대화·단독·팀 중 처리 방식을 정합니다. Enter로 보내고 Shift+Enter로 줄을 바꿉니다. /를 입력하면 Claude Code 명령어를 고를 수 있습니다." aria-autocomplete="list" aria-controls="cmdPop"></textarea>
           <div class="composer-foot">
             <select id="permMode" aria-label="대화로 처리할 때 도구 승인 방식" title="대화로 처리할 때 도구 승인 방식">
               <option value="manual">매번 묻기</option>
@@ -107,7 +109,7 @@
   <dialog id="rejectDlg" class="dlg">
     <form method="dialog" class="dlg-body">
       <h2>반려하고 다시 맡기기</h2>
-      <p class="hint">무엇이 마음에 들지 않는지 적어주세요. 개발자에게 그대로 전달됩니다.</p>
+      <p class="hint">무엇이 마음에 들지 않는지 적어주세요. 개발 팀장에게 그대로 전달됩니다.</p>
       <textarea id="rejectText" rows="5"></textarea>
       <div class="dlg-actions">
         <button class="btn" value="cancel">취소</button>

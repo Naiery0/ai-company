@@ -8,7 +8,7 @@
 const ROLES = {
   ceo: { id: 'ceo', name: '대표', title: '오케스트레이터', color: '#E2574C' },
   planner: { id: 'planner', name: '기획자', title: '제품 기획', color: '#8E6BD8' },
-  dev: { id: 'dev', name: '개발자', title: '구현 담당', color: '#3D8FD1' },
+  dev: { id: 'dev', name: '개발 팀장', title: '구현 담당', color: '#3D8FD1' },
   qa: { id: 'qa', name: 'QA', title: '독립 검증', color: '#2FA37A' },
 };
 
