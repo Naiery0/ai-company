@@ -119,7 +119,10 @@ async function handleTurn(prompt) {
   const data = structured(prompt);
   const isDev = /유일한 코드 작성자|대화"로 처리/.test(sys) && !schema;
   const isQa = data && 'pass' in data;
-  if (data) {
+  if (/^\//.test(prompt) && !schema) {
+    await sleep(1500);
+    await streamText(`(데모) \`${prompt.split(/\s/)[0]}\` 명령을 실행했습니다.`);
+  } else if (data) {
     await tool('Read', { file_path: 'README.md' }, '# project', false);
     if (isQa) await tool('Bash', { command: 'npm test' }, '4 passing', false);
     await streamText(isQa ? (data.pass ? '모든 항목을 확인했습니다.' : '실패 항목이 있어 반려합니다.') : '검토를 마쳤습니다. 결과를 정리했습니다.');
@@ -148,7 +151,14 @@ rl.on('line', (line) => {
   let m; try { m = JSON.parse(line); } catch { return; }
   if (m.type === 'control_request') {
     if (m.request.subtype === 'interrupt') { aborted = true; for (const [k, r] of pending) { pending.delete(k); r({ behavior: 'deny' }); } }
-    out({ type: 'control_response', response: { subtype: 'success', request_id: m.request_id, response: {} } });
+    const response = m.request.subtype === 'initialize' ? { commands: [
+      { name: 'compact', description: '대화를 요약해 컨텍스트를 비웁니다', argumentHint: '<요약 지시>' },
+      { name: 'context', description: '현재 컨텍스트 사용량을 보여줍니다', argumentHint: '' },
+      { name: 'model', description: '모델을 바꿉니다', argumentHint: '<model>' },
+      { name: 'init', description: 'CLAUDE.md를 만듭니다', argumentHint: '' },
+      { name: 'usage', description: '사용량을 보여줍니다', argumentHint: '' },
+    ] } : {};
+    out({ type: 'control_response', response: { subtype: 'success', request_id: m.request_id, response } });
     return;
   }
   if (m.type === 'control_response') {

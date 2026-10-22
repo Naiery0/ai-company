@@ -97,10 +97,16 @@ class ClaudeSession extends EventEmitter {
       this.emit('event', { kind: 'stderr', text: d });
     });
     this.proc.on('error', (err) => {
+      // 실행 자체가 실패하면 exit 이벤트가 오지 않는다. 닫힌 세션으로 표시해야 다음 전송 때 새로 띄운다.
+      const dead = this.proc;
+      this.closed = true;
+      this.proc = null;
       this.emit('event', { kind: 'error', text: `claude 실행 실패: ${err.message}` });
       this.failTurn(new Error(`claude 실행 실패 (${err.code || err.message}). 설정에서 claude 경로를 확인하세요.`));
+      if (dead) this.emit('event', { kind: 'exit', code: null, signal: null });
     });
     this.proc.on('exit', (code, signal) => {
+      if (this.closed && !this.proc) return; // error 처리에서 이미 닫음
       this.closed = true;
       this.proc = null;
       this.emit('event', { kind: 'exit', code, signal });
@@ -109,8 +115,9 @@ class ClaudeSession extends EventEmitter {
         this.failTurn(new Error(`claude 프로세스가 응답 전에 종료됨 (code ${code})${tail ? ': ' + tail : ''}`));
       }
     });
-    // SDK와 동일하게 initialize 를 먼저 보낸다.
-    this.write({ type: 'control_request', request_id: nextReqId(), request: { subtype: 'initialize' } });
+    // SDK와 동일하게 initialize 를 먼저 보낸다. 응답에 사용 가능한 슬래시 명령 목록이 들어 있다.
+    this.initReqId = nextReqId();
+    this.write({ type: 'control_request', request_id: this.initReqId, request: { subtype: 'initialize' } });
   }
 
   write(obj) {
@@ -286,14 +293,34 @@ class ClaudeSession extends EventEmitter {
       case 'control_cancel_request':
         this.emit('event', { kind: 'permission_cancel', requestId: m.request_id });
         return;
+      case 'control_response': {
+        const r = m.response || {};
+        if (r.request_id === this.initReqId && r.subtype === 'success') this.emit('event', { kind: 'init_info', info: r.response || {} });
+        return;
+      }
       default:
         return; // control_response, keep_alive 등은 무시
     }
   }
 }
 
+/** 사용자 턴 없이 initialize 응답(슬래시 명령 목록 등)만 받아 온다. 사용량 0. 실패하면 null. */
+function probeInit({ claudePath, cwd, timeoutMs = 20000 }) {
+  return new Promise((resolve) => {
+    const s = new ClaudeSession({ cwd, claudePath });
+    let done = false;
+    const finish = (v) => { if (done) return; done = true; clearTimeout(timer); s.close(); resolve(v); };
+    const timer = setTimeout(() => finish(null), timeoutMs);
+    s.on('event', (ev) => {
+      if (ev.kind === 'init_info') finish(ev.info);
+      else if (ev.kind === 'exit' || ev.kind === 'error') finish(null);
+    });
+    s.start();
+  });
+}
+
 function newId(prefix) {
   return `${prefix}_${crypto.randomBytes(5).toString('hex')}`;
 }
 
-module.exports = { ClaudeSession, resolveCommand, newId };
+module.exports = { ClaudeSession, resolveCommand, probeInit, newId };
