@@ -25,7 +25,7 @@
     monitor: '#2a2a2a', led: '#6b6b6b', lamp: '#f6c445', coral: '#e2574c', mint: '#2fa37a',
     skin: '#f1c7a4', skinS: '#d9a882', pants: '#2a2a2a', paper: '#f5f5f5', plant: '#3e9a62', plantD: '#2b6e46', pot: '#b9643c',
     star: '#fbe7a6', rug: '#d9c48c', rugD: '#c4ad72', metal: '#9a9a9a', metalL: '#7a7a7a', metalR: '#8a8a8a',
-    rack: '#3a3a3a', rackL: '#262626', rackR: '#303030', leather: '#8a5a3c', leatherL: '#6b4330', leatherR: '#7a4e36',
+    rack: '#3a3a3a', rackL: '#262626', rackR: '#303030', leather: '#8a5a3c', leatherL: '#6b4330', leatherR: '#7a4e36', leatherT: '#9c6a48',
   };
 
   const LOOKS = {
@@ -611,12 +611,22 @@
       if (s.i === SOFA_SLICES[0].i) { const c = iso((SOFA.x0 + SOFA.x1) / 2, (SOFA.y0 + SOFA.y1) / 2); drawAsset(ctx, 'sofa', c.x, c.y, 'idle', t); }
       return;
     }
-    const last = s.x1 === SOFA.x1;
-    const side = last ? P.leatherR : null;
-    boxRect(ctx, s.x0, SOFA.y0, s.x1, SOFA.y0 + 0.22, 15, P.leatherR, P.leatherL, side); // 등받이
-    boxRect(ctx, s.x0, SOFA.y0 + 0.22, s.x1, SOFA.y1, 7, P.leather, P.leatherL, side);  // 방석
-    if (s.x0 === SOFA.x0) boxRect(ctx, SOFA.x0, SOFA.y0, SOFA.x0 + 0.22, SOFA.y1, 11, P.leatherR, P.leatherL, P.leatherR); // 팔걸이
-    if (last) boxRect(ctx, SOFA.x1 - 0.22, SOFA.y0, SOFA.x1, SOFA.y1, 11, P.leatherR, P.leatherL, P.leatherR);
+    // 등받이·방석은 양쪽 팔걸이 사이에만 놓고, 윗면을 밝게 해 등받이·팔걸이·방석 경계가 보이게 한다
+    const ARM = 0.18, ax0 = SOFA.x0 + ARM, ax1 = SOFA.x1 - ARM;
+    const a = Math.max(s.x0, ax0), b = Math.min(s.x1, ax1), yb = SOFA.y0 + 0.22;
+    if (s.x0 === SOFA.x0) boxRect(ctx, SOFA.x0, SOFA.y0, ax0, SOFA.y1, 9, P.leatherT, P.leatherL, P.leatherR); // 왼쪽 팔걸이(뒤에 있으니 먼저)
+    if (b > a) {
+      boxRect(ctx, a, SOFA.y0, b, yb, 15, P.leatherT, P.leatherL, b === ax1 ? P.leatherR : null); // 등받이(팔걸이 위로 솟은 옆면까지)
+      boxRect(ctx, a, yb, b, SOFA.y1, 7, P.leather, P.leatherL, null);                             // 방석
+      poly(ctx, [up(iso(a, SOFA.y1), 7), up(iso(b, SOFA.y1), 7), up(iso(b, SOFA.y1), 6), up(iso(a, SOFA.y1), 6)], P.leatherT); // 방석 앞 모서리
+      const mid = (SOFA.x0 + SOFA.x1) / 2;                                                          // 방석 두 장 사이 이음선
+      if (mid > a && mid < b) {
+        const p = up(iso(mid, yb), 7), q = up(iso(mid, SOFA.y1), 7);
+        poly(ctx, [p, q, { x: q.x + 1, y: q.y }, { x: p.x + 1, y: p.y }], P.leatherL);
+        R(ctx, q.x, q.y, 1, 7, '#5a3828');
+      }
+    }
+    if (s.x1 === SOFA.x1) boxRect(ctx, ax1, SOFA.y0, SOFA.x1, SOFA.y1, 9, P.leatherT, P.leatherL, P.leatherR); // 오른쪽 팔걸이
   }
 
   function drawLoungeTable(ctx, t) {
