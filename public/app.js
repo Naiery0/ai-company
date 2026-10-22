@@ -49,7 +49,7 @@
     Office.setRun(S.viewRunId ? snap.runs[S.viewRunId] : null);
     Office.setSubs(snap.subs);
     Office.setDocs(docCount());
-    $('#permMode').value = snap.settings.direct.permissionMode || 'acceptEdits';
+    $('#permMode').value = snap.settings.direct.permissionMode || 'auto';
     renderAll();
   }
 

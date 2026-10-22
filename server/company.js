@@ -25,10 +25,10 @@ const DEFAULT_SETTINGS = {
   roles: {
     ceo: { model: 'sonnet', effort: 'low', permissionMode: 'manual', allowedTools: [] }, // 판단은 빠르고 가볍게
     planner: { model: 'opus', effort: 'high', permissionMode: 'manual', allowedTools: [] },
-    dev: { model: 'opus', effort: 'high', permissionMode: 'acceptEdits', allowedTools: SAFE_BASH },
-    qa: { model: 'opus', effort: 'high', permissionMode: 'manual', allowedTools: SAFE_BASH, tools: ['Read', 'Glob', 'Grep', 'Bash'] },
+    dev: { model: 'opus', effort: 'high', permissionMode: 'auto', allowedTools: SAFE_BASH },
+    qa: { model: 'opus', effort: 'high', permissionMode: 'auto', allowedTools: SAFE_BASH, tools: ['Read', 'Glob', 'Grep', 'Bash'] },
   },
-  direct: { model: '', effort: '', permissionMode: 'acceptEdits' },
+  direct: { model: '', effort: '', permissionMode: 'auto' }, // 자동 판단: 평소 Claude Code 기본값과 같게(위험해 보이는 것만 묻는다)
 };
 
 function deepMerge(base, over) {
