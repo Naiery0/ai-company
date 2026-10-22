@@ -377,7 +377,7 @@ class Company {
     if (conv.route === 'chat' && chatAlive) { this.sendChat(conv, text, opts); return { convId: conv.id }; }
     // Claude Code 슬래시 명령은 판단 없이 개발자 세션에 그대로 전달한다
     if (isCommand) {
-      if (conv.route !== 'chat') conv.transcript.push({ type: 'route', route: 'chat', reason: '명령어는 개발자 세션에 바로 전달합니다', forced: true });
+      if (conv.route !== 'chat') conv.transcript.push({ type: 'route', route: 'chat', reason: '명령어는 개발 팀장 세션에 바로 전달합니다', forced: true });
       conv.route = 'chat';
       this.sendChat(conv, text, opts);
       return { convId: conv.id };

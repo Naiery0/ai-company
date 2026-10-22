@@ -138,7 +138,7 @@
     if (!conv || !conv.items.length) {
       const note = h('div', { class: 'empty-note' },
         h('b', {}, '무엇을 만들까요?'),
-        h('p', {}, '질문이나 작은 수정은 개발자와 바로 대화로, 범위가 정해진 구현은 개발자 단독으로, 큰 일은 기획 → 완료 기준 합의 → 개발 → 독립 QA를 거치는 팀으로 처리합니다.'),
+        h('p', {}, '질문이나 작은 수정은 개발 팀장과 바로 대화로, 범위가 정해진 구현은 개발 팀장 단독으로, 큰 일은 기획 → 완료 기준 합의 → 개발 → 독립 QA를 거치는 팀으로 처리합니다.'),
         h('p', {}, '어떤 방식으로 할지는 대표가 메시지마다 판단합니다.'));
       if (!S.snap.isGit) {
         note.append(h('p', {}, '이 폴더는 git 저장소가 아니라서 변경사항 비교와 자동 커밋을 쓸 수 없습니다. ',
@@ -261,7 +261,7 @@
   }
 
   // ───────── 업무 카드 ─────────
-  const ROUTE_TEXT = { chat: '대화로 처리', solo: '개발자 단독', team: '팀 업무' };
+  const ROUTE_TEXT = { chat: '대화로 처리', solo: '개발 팀장 단독', team: '팀 업무' };
   const STATUS_TEXT = { running: '진행 중', review: '결재 대기', done: '완료', failed: '실패', cancelled: '중지됨', discarded: '폐기됨' };
   const STATUS_TONE = { running: 'lamp', review: 'lamp', done: 'good', failed: 'bad', cancelled: '' };
 
@@ -404,7 +404,7 @@
     const runBusy = run && run.status === 'running';
     $('#input').disabled = !has;
     const following = conv && conv.items && conv.items.some((x) => x.type === 'route' && x.route === 'chat') && lastRoute(conv) === 'chat';
-    let hint = following ? '이어지는 메시지는 개발자에게 바로 전달됩니다' : '';
+    let hint = following ? '이어지는 메시지는 개발 팀장에게 바로 전달됩니다' : '';
     let block = !has;
     if (runBusy) { hint = '회사 업무 중입니다. 끝나면 보낼 수 있습니다'; block = true; }
     else if (convBusy && following) hint = '응답 중입니다. 지금 보내면 응답이 끝난 뒤 이어서 전달됩니다';
@@ -687,13 +687,13 @@
       h('label', { class: 'field' }, h('span', {}, 'claude 실행 파일 경로'),
         h('input', { type: 'text', name: 'claudePath', value: s.claudePath, disabled: S.snap.demo, spellcheck: 'false' }),
         h('small', {}, S.snap.demo ? '데모 모드에서는 모의 직원을 씁니다.' : 'PATH에 있으면 claude 그대로 두세요. 못 찾으면 claude.exe 전체 경로를 적습니다.')),
-      h('label', { class: 'field' }, h('span', {}, '업무 처리 방식'), sel('forceMode', [['auto', '대표가 판단'], ['chat', '항상 대화'], ['solo', '항상 개발자 단독'], ['team', '항상 팀 업무']], s.forceMode),
+      h('label', { class: 'field' }, h('span', {}, '업무 처리 방식'), sel('forceMode', [['auto', '대표가 판단'], ['chat', '항상 대화'], ['solo', '항상 개발 팀장 단독'], ['team', '항상 팀 업무']], s.forceMode),
         h('small', {}, '보통은 대표에게 맡겨두세요. 고정하면 판단 단계를 건너뜁니다.')),
       h('label', { class: 'field' }, h('span', {}, 'QA 최대 반려 횟수'), h('input', { type: 'number', name: 'maxQaRounds', min: '1', max: '10', value: s.maxQaRounds }),
         h('small', {}, '단독 업무에서 확인 명령이 실패할 때 다시 맡기는 횟수에도 쓰입니다.')),
       h('label', { class: 'field' }, h('span', {}, '단독 업무 확인 명령'),
         h('input', { type: 'text', name: 'checkCommand', value: s.checkCommand || '', placeholder: '비우면 package.json의 test 스크립트(npm test)를 찾아 씁니다', spellcheck: 'false' }),
-        h('small', {}, '개발자가 끝내면 회사가 이 명령을 직접 실행해 확인합니다(사용량 0). 실패하면 출력과 함께 개발자에게 돌려보냅니다.')),
+        h('small', {}, '개발 팀장이 끝내면 회사가 이 명령을 직접 실행해 확인합니다(사용량 0). 실패하면 출력과 함께 개발 팀장에게 돌려보냅니다.')),
       h('label', { class: 'field' }, h('span', {}, '승인 시 자동 커밋'), sel('autoCommit', [['true', '켜기'], ['false', '끄기']], String(s.autoCommit)))));
 
     const roleFs = h('fieldset', {}, h('legend', {}, '직원별 설정'),

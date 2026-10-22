@@ -192,7 +192,7 @@ class Run {
   async makeContract() {
     this.setStage('contract', 'active');
     this.company.gather(['dev', 'qa']);
-    this.log('개발자와 QA가 완료 기준을 협상합니다', 'qa');
+    this.log('개발 팀장과 QA가 완료 기준을 협상합니다', 'qa');
     const { result: pr } = await this.ask('dev', {
       label: '구현 제안',
       systemKey: 'devPropose',

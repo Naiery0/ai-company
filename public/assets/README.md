@@ -20,14 +20,18 @@
 | `table` | 회의 테이블 바닥면 중심 |
 | `plant` | 화분 바닥 중심 |
 | `cooler` | 정수기 바닥 중심 |
-| `reception` | 복도 안내 데스크 바닥 중심 |
+| `chair` | 사무용 의자 앉는 자리 바닥 중심(등받이 포함 한 장) |
+| `bookshelf` | 대표실·기획실 책장 바닥 중심 |
 | `sofa`, `loungeTable`, `coffee` | 라운지 소파·탁자·커피 머신 바닥 중심 |
 | `rack` | 서버실 랙 바닥 중심(`work`: 명령 실행 중, `idle`: 대기) |
 | `console` | 서버실 확인 결과 모니터 바닥 중심 |
 | `cabinet`, `shredder` | 문서 보관실 캐비닛·파쇄기 바닥 중심 |
 | `board` | QA실 체크리스트 칠판 바닥 중심 |
+| `stageBoard` | 회의실 업무 단계 보드 바닥 중심 |
 | `char.ceo`, `char.planner`, `char.dev`, `char.qa` | 직원 발 위치 |
-| `char.sec`, `char.temp` | 비서, 임시 직원(서브에이전트) 발 위치 |
+| `char.sec`, `char.member`, `char.temp` | 비서, 개발 팀원, 임시 도우미(팀원이 모두 바쁠 때) 발 위치 |
+| `char.<이름>.seated` | 모니터를 보고 앉은 뒷모습(예: `char.dev.seated`). 없으면 기본 도트로 그림 |
+| `char.<이름>.seatedFront` | 앞을 보고 앉은 모습(대표·기획자). 다리는 책상에 가려짐 |
 
 ## 직원 스프라이트 애니메이션
 
@@ -38,7 +42,7 @@
 - `think`: 생각 중(응답 생성 전)
 - `work`: 도구 사용/코드 작성 중
 - `wait`: 사용자 승인 대기
-- `walk`: 이동 중(자리·회의실·라운지 사이)
+- `walk`: 이동 중(자리·회의실 사이)
 
 ## 예시
 
